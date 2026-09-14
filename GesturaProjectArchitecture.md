@@ -210,9 +210,10 @@ Ranked by actual novelty contribution and checked against feasibility. None of t
 
 Unchanged from v2.
 
-- Models available free: **Llama 3.1 8B Instant** (fast/low-latency), **Llama 3.3 70B Versatile** (higher quality), Llama 4 Scout, Qwen3 32B, gpt-oss-20b/120b.
-- Free tier: rate-limited, not credit-limited — roughly **30 requests/minute**, up to **~14,400 requests/day**, with per-model token caps (e.g. ~6,000–12,000 tokens/minute depending on model size).
-- **Bonus architectural opportunity**: since Groq gives real latency/quality tiers on one key for free, the previously-deferred "FAST vs CAREFUL" adaptive policy idea is cheap to justify — Llama 3.1 8B for casual chit-chat, Llama 3.3 70B for ambiguous/domain-heavy segments.
+- **AMENDED 2026-09-15 (T1.1) — verified against the live catalog via `client.models.list()`.** The Llama models this section originally named (Llama 3.1 8B Instant, Llama 3.3 70B Versatile, Llama 4 Scout, Qwen3 32B) are **no longer served**. Actual free-tier catalog: `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, `openai/gpt-oss-safeguard-20b`, `qwen/qwen3.6-27b`, `qwen/qwen3.8-27b`, `groq/compound`, `groq/compound-mini`, `allam-2-7b`, `whisper-large-v3`, `whisper-large-v3-turbo`, `canopylabs/orpheus-v1-english`, `canopylabs/orpheus-arabic-saudi`, and two `llama-prompt-guard-2` safety classifiers.
+- **Reasoning-model caveat**: `gpt-oss` and `qwen3.x` are reasoning models. Without `reasoning_effort="low"` (gpt-oss) or an adequate token budget, they consume the whole completion allowance on hidden reasoning and return **empty content**. This is a real failure mode, not a tuning preference.
+- Free tier: rate-limited, not credit-limited. Real observed headers on the gpt-oss models: **1,000 requests/minute** and **8,000 tokens/minute**. RPM is far more generous than this document originally assumed (~30/min); **TPM is the binding constraint**. `groq/compound-mini` trades RPM for tokens at 250 rpm / 70,000 tpm.
+- **Bonus architectural opportunity**: since Groq gives real latency/quality tiers on one key for free, the previously-deferred "FAST vs CAREFUL" adaptive policy idea is cheap to justify — `gpt-oss-20b` for casual chit-chat, `gpt-oss-120b` for ambiguous/domain-heavy segments. Both measured at ~0.5s on a gloss-reconstruction prompt.
 
 ### 6.2 Speech-to-Text — Groq Whisper primary, WhisperLiveKit for local fallback
 
@@ -223,7 +224,7 @@ Unchanged from v2.
 
 ### 6.3 Text-to-Speech — simplified: Tamil optional, no Malayalam
 
-- **English (mandatory)**: Groq TTS — PlayAI (`playai-tts`) or Canopy Labs' Orpheus (`canopylabs/orpheus-v1-english`), same free-tier key. Supports English and Arabic.
+- **English (mandatory)**: Groq TTS — Canopy Labs' Orpheus (`canopylabs/orpheus-v1-english`), same free-tier key. **AMENDED 2026-09-15 (T1.1):** PlayAI (`playai-tts`) was also named here but is no longer in the live catalog. Orpheus is confirmed present and is the only English TTS path for Stage 1. An Arabic sibling (`canopylabs/orpheus-arabic-saudi`) exists but is not relevant to this project.
 - **Tamil (optional, only if pursued)**: **USE `ai4bharat/indic-parler-tts`**, self-hosted, Apache 2.0. Confirmed to cover **21 languages including both Tamil and English in the same model** — no reference audio needed, voice described in natural language (age/gender/style). Self-host via MPS on the M5.
   - **DO NOT use `AI4Bharat/IndicF5` for this**: confirmed it covers Tamil but **not English**, and it's reference-audio-based (voice cloning) — needs a per-utterance reference clip plus real consent/licensing handling for whatever voice is cloned. More setup for no benefit here.
   - **DO NOT use `AI4Bharat/Indic-TTS`** (the older project) as a dependency — it's a training/config repo, not a ready inference package.

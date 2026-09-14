@@ -38,15 +38,27 @@ English-only, on a curated sign vocabulary, for this stage.
 
 **GROUND TRUTH — do not silently change these:**
 
-- **LLM reasoning:** Groq API, free tier. Use `llama-3.1-8b-instant` for
-  low-latency segments and `llama-3.3-70b-versatile` for higher-quality/complex
+- **LLM reasoning:** Groq API, free tier. Use `openai/gpt-oss-20b` for
+  low-latency segments and `openai/gpt-oss-120b` for higher-quality/complex
   segments. This replaced an earlier plan to use Claude Haiku 4.5 — that
   decision is superseded, do not reintroduce it.
+  **AMENDED 2026-09-15 (T1.1):** this block originally pinned
+  `llama-3.1-8b-instant` and `llama-3.3-70b-versatile`. Both were verified
+  absent from the live Groq catalog via `client.models.list()` on that date and
+  replaced with the gpt-oss pair, which preserves the same fast-path/careful-path
+  split on a single key. **These are reasoning models** — pass
+  `reasoning_effort="low"` on every chat call or they spend the entire
+  completion budget on hidden reasoning and return empty content.
+  Real observed limits are 1,000 req/min and **8,000 tokens/min** — TPM, not
+  RPM, is the binding constraint that NFR-2's chunking design must protect.
 - **STT:** Groq-hosted Whisper (`whisper-large-v3-turbo`), chunked on natural
   speech pauses, never per-word (free-tier cap is real — architecture v3 §6.2,
   roughly 20 req/min, 2,000/day).
-- **TTS (English only, this stage):** Groq TTS, `playai-tts` or
+- **TTS (English only, this stage):** Groq TTS,
   `canopylabs/orpheus-v1-english`. Tamil is out of scope for Stage 1 entirely.
+  **AMENDED 2026-09-15 (T1.1):** `playai-tts` was also listed here but is no
+  longer in the live catalog; `canopylabs/orpheus-v1-english` is present and is
+  now the only English TTS option for this stage.
 - **Pose extraction and storage:** the `pose-format` package
   (`sign-language-processing/pose` on GitHub, confirmed 112 stars/MIT/actively
   maintained). Install with `pip install pose-format`. Use its `.pose` file

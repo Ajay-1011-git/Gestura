@@ -43,6 +43,7 @@ look like spelling rather than a stutter.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import io
 import json
@@ -53,6 +54,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from pose_format import Pose
+from pose_format.numpy import NumPyPoseBody
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -75,6 +78,25 @@ MIN_HOLD_FRAMES = 4
 
 OUT_DIR = ROOT / "data" / "fingerspelling"
 CACHE = ROOT / "data" / "fingerspelling" / ".source_video"
+
+# Every letter is rescaled into this one reference frame before being written.
+#
+# This is not cosmetic. The 26 letters come from 22 different source clips, and
+# those clips are different YouTube crops — measured, 636x1018 through 926x1032,
+# 22 distinct sizes. `pose_video` emits coordinates in *pixel* space, so a pose
+# only means anything relative to the frame it was extracted from. Concatenating
+# them under a single header, which is exactly what spelling a word does, would
+# put every letter after the first in the wrong coordinate space: hands jumping
+# in size and drifting off centre between one letter and the next.
+#
+# It is the same defect R-10 names for the render lexicon (1920x1080 entries
+# against an 854x480 corpus, where "the avatar's finger solving reads that
+# difference directly") — arriving here through a different door, because this
+# library has 22 sources instead of one.
+#
+# Scaling is uniform on both axes so the signer is not stretched, and the frame
+# is centred horizontally, which is where the signer sits in these crops.
+REF_WIDTH, REF_HEIGHT = 800, 1024
 
 
 @dataclass
@@ -138,9 +160,38 @@ def choose_exemplars(signer: str = PREFERRED_SIGNER) -> dict[str, Candidate]:
     return chosen
 
 
-def build(chosen: dict[str, Candidate], *, out_dir: Path = OUT_DIR) -> list[dict]:
-    from pose_format import Pose
+def normalise(pose, *, width: int = REF_WIDTH, height: int = REF_HEIGHT):
+    """Rescale one clip's pixel coordinates into the shared reference frame.
 
+    See REF_WIDTH's comment for why this is load-bearing rather than tidying.
+    Uniform scale on x and y so the signer keeps their proportions; the leftover
+    horizontal margin is split evenly, which centres a centred signer. Z is
+    scaled by the same factor as x, matching how MediaPipe reports depth
+    relative to frame width.
+    """
+    source = pose.header.dimensions
+    scale = min(width / source.width, height / source.height)
+    offset_x = (width - source.width * scale) / 2.0
+    offset_y = (height - source.height * scale) / 2.0
+
+    data = np.ma.array(pose.body.data, copy=True).astype(np.float32)
+    data[..., 0] = data[..., 0] * scale + offset_x
+    data[..., 1] = data[..., 1] * scale + offset_y
+    if data.shape[-1] > 2:
+        data[..., 2] = data[..., 2] * scale
+
+    header = copy.deepcopy(pose.header)
+    header.dimensions.width = width
+    header.dimensions.height = height
+
+    return Pose(
+        header=header,
+        body=NumPyPoseBody(fps=float(pose.body.fps), data=data,
+                           confidence=np.asarray(pose.body.confidence)),
+    )
+
+
+def build(chosen: dict[str, Candidate], *, out_dir: Path = OUT_DIR) -> list[dict]:
     from backend.recognition.extract import extract_pose_file, load_pose
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -169,10 +220,7 @@ def build(chosen: dict[str, Candidate], *, out_dir: Path = OUT_DIR) -> list[dict
                 print(f"    skip {candidate.letter!r}: only {end-start} usable frames")
                 continue
 
-            clipped = Pose(
-                header=source.header,
-                body=source.body[start:end],
-            )
+            clipped = normalise(Pose(header=source.header, body=source.body[start:end]))
             destination = out_dir / f"{candidate.letter}.pose"
             with destination.open("wb") as handle:
                 clipped.write(handle)

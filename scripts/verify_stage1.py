@@ -99,11 +99,31 @@ def item_4_fingerspelling() -> None:
     known_ok = all(
         by_gloss.get(g) is CoverageStatus.LEXICON_HIT for g in ("HELLO", "YOU", "SIT")
     )
-    flagged = oov in (CoverageStatus.FINGERSPELLING, CoverageStatus.UNMATCHED)
     check(
-        flagged and known_ok,
+        oov is CoverageStatus.UNMATCHED and known_ok,
         "4. an out-of-vocabulary term is reported, not silently guessed",
         "coverage: " + ", ".join(f"{c.gloss}={c.status.value}" for c in coverage),
+    )
+
+    # T1.9 asks for a fingerspelling fallback and this reports, plainly, that it
+    # does not exist for ISL. The check used to accept FINGERSPELLING *or*
+    # UNMATCHED, which passed while hiding that the first is unreachable.
+    import spoken_to_signed
+
+    bundled = sorted(
+        p.name for p in
+        (Path(spoken_to_signed.__file__).parent / "assets" / "fingerspelling_lexicon").iterdir()
+        if p.is_dir()
+    )
+    check(
+        "ins" not in bundled,
+        "4b. ISL fingerspelling is unavailable, and is reported as UNMATCHED not faked",
+        f"spoken-to-signed-translation bundles {len(bundled)} fingerspelling lexicons "
+        f"and 'ins' is not among them (note 'ise' is Italian, not Indian). ISL uses a "
+        f"two-handed manual alphabet, so no bundled set substitutes. Out-of-vocabulary "
+        f"terms therefore surface as UNMATCHED and the waterfall refuses — correct "
+        f"under FR-12, but the FINGERSPELLING tier is unreachable until an ISL "
+        f"alphabet is recorded.",
     )
 
 
@@ -245,6 +265,85 @@ def item_8_decision_log(entries) -> None:
 
 
 # ---------------------------------------------------------------- item 9 ----
+def item_11_orchestrator() -> None:
+    """Both directions run end to end through one waterfall, one log."""
+    from backend.orchestrator import Interpreter
+    from backend.recognition.extract import load_pose
+    from backend.waterfall.escalation import Action
+
+    spoken: list[str] = []
+    interpreter = Interpreter(speak=spoken.append)
+
+    clip = sorted((ROOT / "data" / "vocab" / "HOSPITAL").glob("*INCLUDE*.pose"))[0]
+    heard = interpreter.sign_to_speech(load_pose(clip))
+    refused = interpreter.speech_to_sign("I need an ambulance.")
+
+    log = interpreter.trace()
+    stages = {"OBSERVE" in log, "DECIDE" in log, "ACTION" in log}
+    check(
+        heard.action is Action.TRANSLATE and bool(heard.spoken)
+        and refused.action is Action.REFUSE and stages == {True},
+        "11. the orchestrator runs both directions through the waterfall",
+        f"sign->speech: {heard.segment.raw_input} @ {heard.segment.confidence:.2f} -> "
+        f"{heard.spoken!r}; speech->sign: {refused.gloss!r} -> {refused.action.value}; "
+        f"both traced in one log ({len(log.splitlines())} lines); "
+        f"recogniser is the {interpreter.recognizer_kind} one over "
+        f"{len(interpreter.recognizer.vocabulary)} signs",
+    )
+
+
+def item_12_uncertainty() -> None:
+    """A low-confidence recognition is spoken with a hedge, not as fact."""
+    from backend.contracts import Direction, Segment
+    from backend.orchestrator import UNCERTAIN_PREFIX, Interpreter
+    from backend.recognition.extract import load_pose
+
+    spoken: list[str] = []
+    interpreter = Interpreter(speak=spoken.append)
+    # The clip the recogniser is least sure about, found rather than assumed.
+    worst, worst_confidence = None, 1.0
+    for gloss in ("HELLO", "YOU", "WHAT", "SHE"):
+        for path in sorted((ROOT / "data" / "vocab" / gloss).glob("*.pose"))[:3]:
+            segment = interpreter.recognizer.classify(load_pose(path))
+            if segment.confidence < worst_confidence:
+                worst, worst_confidence = path, segment.confidence
+    outcome = interpreter.sign_to_speech(load_pose(worst))
+    hedged = outcome.uncertain and outcome.spoken.startswith(UNCERTAIN_PREFIX)
+    check(
+        (not outcome.uncertain) or hedged,
+        "12. a low-confidence recognition is hedged when spoken",
+        f"{worst.name[:34]} read at {worst_confidence:.2f}; "
+        f"uncertain={outcome.uncertain}; spoken {outcome.spoken!r}",
+    )
+
+
+def item_13_live_capture() -> None:
+    """Sign segmentation works on a signal, so the live path is testable."""
+    import numpy as np
+
+    from backend.recognition.capture import (
+        SegmenterConfig, SignSegmenter, downscale_grey, frame_motion,
+    )
+
+    signal = [0.001] * 10 + [0.05] * 40 + [0.001] * 20 + [0.05] * 2 + [0.001] * 20
+    segmenter = SignSegmenter(SegmenterConfig())
+    events = [e for m in signal if (e := segmenter.update(m))]
+
+    still = np.zeros((480, 640, 3), np.uint8)
+    moved = still.copy()
+    moved[100:200, 100:200] = 255
+    quiet = frame_motion(downscale_grey(still), downscale_grey(still))
+    active = frame_motion(downscale_grey(still), downscale_grey(moved))
+
+    check(
+        events == ["start", "end"] and quiet < 0.012 <= active,
+        "13. live sign segmentation detects one sign and ignores a twitch",
+        f"events {events} over a 92-frame signal containing one 40-frame sign and a "
+        f"2-frame twitch; motion still={quiet:.4f} moving={active:.4f} "
+        f"against a {SegmenterConfig().motion_threshold} threshold",
+    )
+
+
 def item_9_scope() -> None:
     import subprocess
 
@@ -532,6 +631,9 @@ def main() -> int:
     item_6_self_tts()
     item_7_overlap()
     item_8_decision_log(entries)
+    item_11_orchestrator()
+    item_12_uncertainty()
+    item_13_live_capture()
     item_9_scope()
 
     if args.live:

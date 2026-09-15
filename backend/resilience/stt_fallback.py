@@ -90,9 +90,11 @@ def _as_float32(audio: np.ndarray | bytes) -> tuple[np.ndarray, float]:
         samples, sample_rate = wav_bytes_to_float32(audio)
     else:
         samples = audio.astype(np.float32)
-        if samples.dtype != np.float32 or np.abs(samples).max(initial=0.0) > 1.5:
-            # int16 PCM, the shape PauseChunker yields.
-            samples = audio.astype(np.float32) / 32768.0
+        # PauseChunker yields int16 PCM; MLX Whisper wants float32 in [-1, 1].
+        # Scale by magnitude rather than dtype, so an already-normalised float
+        # array passed straight in is not divided a second time.
+        if np.abs(samples).max(initial=0.0) > 1.5:
+            samples = samples / 32768.0
         sample_rate = SAMPLE_RATE
     if samples.size == 0:
         raise SttFallbackError("empty audio supplied to the local STT fallback")

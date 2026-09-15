@@ -149,32 +149,45 @@ export class PoseRetargeter {
     );
   }
 
-  /** Rotate a bone so its rest direction points along `target`. */
+  /**
+   * Rotate a bone so its own pointing axis aligns with `target`.
+   *
+   * The axis comes from the rest pose in the bone's **local** space and is
+   * transformed by the bone's current world rotation, so it moves as the bone
+   * moves and the solve converges. Deriving the direction from world joint
+   * positions instead breaks leaf bones: a fingertip's own rotation does not
+   * change its world position, so the delta never shrinks and the bone spins
+   * indefinitely.
+   *
+   * Solved directly rather than slerped toward, because a partial step leaves a
+   * finger between two handshapes — which reads as neither.
+   */
   private aim(name: HumanoidBone, target: THREE.Vector3, bias = 0): boolean {
     const bone = this.avatar.bones.get(name);
-    if (!bone || !bone.parent || target.lengthSq() < 1e-9) return false;
+    const rest = this.avatar.restPose.get(name);
+    if (!bone || !bone.parent || !rest || target.lengthSq() < 1e-9) return false;
 
     const direction = target.clone().normalize();
-    if (bias) direction.z += bias, direction.normalize();
+    if (bias) {
+      direction.z += bias;
+      direction.normalize();
+    }
 
-    // Rest direction is normally bone -> first child bone. Distal fingertip
-    // bones are leaves with no child, which would skip the last joint of every
-    // finger and leave fingertips permanently uncurled — 15 of 20 hand bones
-    // driven instead of all 20. For a leaf, the parent -> bone direction
-    // continues the chain and is the right reference.
-    const origin = bone.getWorldPosition(new THREE.Vector3());
-    const child = bone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
-    const restDirection = child
-      ? child.getWorldPosition(new THREE.Vector3()).sub(origin)
-      : origin.clone().sub(bone.parent.getWorldPosition(new THREE.Vector3()));
-    if (restDirection.lengthSq() < 1e-9) return false;
-    restDirection.normalize();
+    const parentWorld = bone.parent.getWorldQuaternion(new THREE.Quaternion());
 
-    const delta = new THREE.Quaternion().setFromUnitVectors(restDirection, direction);
-    const world = bone.getWorldQuaternion(new THREE.Quaternion()).premultiply(delta);
-    const local = bone.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(world);
+    // Where the bone's axis points if the bone sits at its rest rotation.
+    const restWorldAxis = rest.axis
+      .clone()
+      .applyQuaternion(rest.quaternion)
+      .applyQuaternion(parentWorld)
+      .normalize();
 
-    bone.quaternion.slerp(local, this.smoothing);
+    const delta = new THREE.Quaternion().setFromUnitVectors(restWorldAxis, direction);
+    const world = delta.multiply(parentWorld.clone().multiply(rest.quaternion));
+    const local = parentWorld.clone().invert().multiply(world);
+
+    bone.quaternion.copy(local);
+    bone.updateMatrixWorld(true);
     this.driven.add(name);
     return true;
   }

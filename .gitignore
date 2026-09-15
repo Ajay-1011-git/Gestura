@@ -32,3 +32,4 @@ data/out/
 *.wav
 *.mp3
 logs/
+data/lexicon_src/

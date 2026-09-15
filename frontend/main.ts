@@ -49,13 +49,10 @@ async function main() {
   let frame = 0, playing = true, last = performance.now(), accumulator = 0;
   let speed = 1.0;
 
-  // A single slerp step lands ~40% of the way to the target, so a seek must
-  // iterate to convergence or it renders a pose that is neither rest nor sign.
-  // Continuous playback needs no iteration: each frame slerps toward a target
-  // that has itself only moved slightly.
-  const show = (index: number, converge = false) => {
-    const steps = converge ? 12 : 1;
-    for (let i = 0; i < steps; i++) retargeter.applyFrame(seq, index);
+  // aim() solves each bone directly from its rest pose, so one pass is exact
+  // and repeat calls are idempotent — no convergence loop needed.
+  const show = (index: number, _converge = false) => {
+    retargeter.applyFrame(seq, index);
     avatar.gltfScene.updateMatrixWorld(true);
     renderer.render(scene, camera);
     const span = timeline.find((t:any)=> index>=t.start_frame && index<t.end_frame);
@@ -107,6 +104,7 @@ async function main() {
     renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
   });
 
+  (window as any).__dbg = { avatar, retargeter, seq, THREE };
   (window as any).__ready = true;
   (window as any).__info = { frames: seq.frameCount, logEntries: panel.count, bones: avatar.report.mappedCount };
 }

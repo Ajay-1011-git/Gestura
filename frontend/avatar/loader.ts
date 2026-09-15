@@ -75,9 +75,24 @@ export function stripSuffix(name: string): string {
 }
 
 export interface RestPose {
-  /** Bone-local rest quaternion, the reference Kalidokit's output is applied against. */
+  /** Bone-local rest quaternion, the reference solved output is applied against. */
   quaternion: THREE.Quaternion;
   position: THREE.Vector3;
+  /**
+   * Unit direction, in this bone's **own local space**, along which the bone
+   * points — normally toward its child joint.
+   *
+   * Retargeting must aim using an axis that rotates *with* the bone. Deriving
+   * the direction from world positions instead is a trap for leaf bones: a
+   * fingertip bone's own rotation does not move its world position, so a
+   * world-derived direction is invariant under the rotation being solved for,
+   * the same delta is reapplied every iteration, and the bone spins without
+   * ever converging.
+   *
+   * Leaves have no child to point at, so they inherit their parent's local
+   * axis — correct along a finger chain, where segments share a convention.
+   */
+  axis: THREE.Vector3;
 }
 
 export interface AvatarReport {
@@ -139,10 +154,25 @@ export async function loadAvatar(url: string): Promise<LoadedAvatar> {
   // T-pose reference; this rig is an A-pose, so retargeting (T1.12) composes its
   // output onto these rest rotations rather than replacing them outright.
   const restPose = new Map<HumanoidBone, RestPose>();
+  const localAxis = (bone: THREE.Bone): THREE.Vector3 | null => {
+    const child = bone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
+    if (child && child.position.lengthSq() > 1e-12) return child.position.clone().normalize();
+    return null;
+  };
+
   for (const [name, bone] of bones) {
+    // Leaf bones inherit the parent's axis; walk up until one is found, and
+    // fall back to +Y, the usual bone axis in Mixamo-derived rigs.
+    let axis = localAxis(bone);
+    let ancestor = bone.parent as THREE.Bone | null;
+    while (!axis && ancestor && (ancestor as THREE.Bone).isBone) {
+      axis = localAxis(ancestor);
+      ancestor = ancestor.parent as THREE.Bone | null;
+    }
     restPose.set(name, {
       quaternion: bone.quaternion.clone(),
       position: bone.position.clone(),
+      axis: axis ?? new THREE.Vector3(0, 1, 0),
     });
   }
 

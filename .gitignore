@@ -12,7 +12,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Node
+# Node / frontend build
 node_modules/
 dist/
 .vite/
@@ -20,8 +20,8 @@ dist/
 # macOS
 .DS_Store
 
-# Recorded vocabulary source video — large, regenerable by re-recording.
-# The extracted .pose files under data/vocab/ ARE committed.
+# Recorded vocabulary source video — large, re-downloadable via the
+# extraction script. The extracted .pose files under data/vocab/ ARE committed.
 data/vocab/raw_video/
 
 # Generated pose output and coverage reports

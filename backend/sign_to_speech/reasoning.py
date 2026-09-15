@@ -22,7 +22,11 @@ from groq import APIConnectionError, APIStatusError, GroqError, RateLimitError
 
 from backend.config import FAST_MODEL, REASONING_EFFORT, get_client
 
-MAX_COMPLETION_TOKENS = 200
+# Headroom for hidden reasoning, not for the answer. gpt-oss spends 138-184
+# tokens reasoning at reasoning_effort="low" even for a one-sentence reply; a
+# 200-token budget truncated intermittently and returned empty content with
+# finish_reason="length". Found while verifying T1.8, fixed in both directions.
+MAX_COMPLETION_TOKENS = 512
 MAX_SENTENCE_CHARS = 300
 
 SYSTEM_PROMPT = """You convert Indian Sign Language gloss into fluent English.
@@ -104,9 +108,15 @@ def reconstruct_sentence(
     except (APIConnectionError, APIStatusError, GroqError) as exc:
         raise ReasoningError(f"Groq call failed for gloss {gloss!r}: {exc}") from exc
 
-    content = response.choices[0].message.content or ""
+    choice = response.choices[0]
+    if choice.finish_reason == "length":
+        raise ReasoningError(
+            f"model hit the {MAX_COMPLETION_TOKENS}-token budget before emitting "
+            f"a sentence for gloss {gloss!r} — hidden reasoning consumed the completion"
+        )
+
     return Reconstruction(
-        sentence=_validate(content, gloss),
+        sentence=_validate(choice.message.content or "", gloss),
         gloss=gloss,
         model=response.model,
         latency_s=time.monotonic() - started,

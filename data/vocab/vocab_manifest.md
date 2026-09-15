@@ -166,17 +166,59 @@ ISO allowlist (`gloss_to_pose/languages.py` holds only a two-entry backup map),
 so `ins` is safe to use as a free-form selector. This closes the question T1.9
 flagged as unverified.
 
+**Checked 2026-09-15 and ruled out as a fix:** the ISLRTC dictionary below does
+*not* contain the manual alphabet. It has signs for the words `Fingerspell`,
+`Alphabet`, `Greek_Alphabets` and `Ancient_Alphabets`, but no individual A–Z
+letter entries (0 of 26 found), and only `Zero` of the digits. An ISL
+fingerspelling lexicon would still have to be recorded or sourced elsewhere.
+
+---
+
+## Vocabulary expansion path — ISLRTC / data.gov.in dictionary
+
+[`silentone0725/Indian_Sign_Language_Data.gov_Rencoded`](https://huggingface.co/datasets/silentone0725/Indian_Sign_Language_Data.gov_Rencoded)
+— the official ISLRTC dictionary, **13,665 clips, MIT licensed**, professional
+studio recording on a plain background with the full signing space in frame.
+Verified 2026-09-15.
+
+Coverage: **16/16** of the active vocabulary above, and **12/18** of the
+deferred words — including `DOCTOR`, `NURSE`, `APPOINTMENT`, `MEDICINE`,
+`PAIN`, `MEET`, `WAIT`, `HAVE`, `TOMORROW`, `NAME`, `COME`, `SORRY`. Missing:
+`WANT`, `NEED`, `WHO`, `UNDERSTAND`, `ME`, `WHEN`.
+
+Measured cost on the target M5: **1.7s per clip, 88KB per `.pose`** → the whole
+dictionary is **~6.3 hours of extraction and ~1.21GB** of pose data. Feasible,
+but it does not belong in a normal git repo — commit the extraction script and
+generate locally, or use Git LFS.
+
+**Its usefulness is asymmetric, and that asymmetry should be stated plainly
+rather than blurred:**
+
+- **Speech→Sign (avatar output): scales fully.** The gloss→pose lexicon is a
+  *lookup* needing exactly one reference pose per gloss, which is precisely
+  what a dictionary provides and precisely the `index.csv` format described
+  above. A five-figure avatar vocabulary is genuinely reachable.
+- **Sign→Speech (recognition): does not scale.** One clip per word cannot train
+  a classifier, and DTW over thousands of single templates from one signer
+  would collapse on visually similar signs. Recognition stays a small curated
+  set — which is exactly what architecture v3 §11.1 already says, and what
+  FR-1 requires.
+
+The honest framing this supports: *Gestura signs a large ISL vocabulary to the
+Deaf user and recognizes a smaller validated set back.* That is a stronger and
+more defensible claim than implying both directions scale equally.
+
 ---
 
 ## Open decisions for the owner
 
-1. **Confirm the ambiguity pair empirically, don't assume it.** Demo scene 2
-   needs two signs the classifier *genuinely* confuses, so the low confidence is
-   real rather than staged (FR-2). Confusability here is **pose-trajectory**
-   similarity — what T1.4 actually measures — not linguistic similarity. After
-   T1.3 extraction, compute the pairwise distance matrix across all 16 classes
-   and pick the closest real pair. `HE`/`SHE` is the strongest prior candidate,
-   but the measurement decides.
+1. ~~**Confirm the ambiguity pair empirically.**~~ **RESOLVED 2026-09-15 by
+   T1.4's held-out run — the pair is `HE`/`SHE`.** The classifier confused them
+   in both directions on real held-out data (`SHE`→`HE` twice, `HE`→`SHE` once),
+   at confidences of 0.077, 0.040 and 0.128 — all well inside the clarification
+   band. Demo scene 2's low confidence is therefore genuine and reproducible,
+   not staged, satisfying FR-2. `YES`/`NO` is a confirmed secondary pair
+   (`YES`→`NO` twice, `NO`→`YES` once) if a backup beat is wanted.
 2. **Resolve the fingerspelling blocker** above before T1.9.
 3. **Confirm the articulation notes.** Per the honesty note, the `notes` column
    is unvalidated.

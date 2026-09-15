@@ -4,6 +4,9 @@ import { Buffer } from "buffer";
 import * as THREE from "three";
 import { loadAvatar, createIsolatedScene } from "./avatar/loader";
 import { loadPoseSequence, PoseRetargeter } from "./avatar/retarget";
+import { VOCABULARY } from "./avatar/handshapes";
+import * as anatomy from "./avatar/hand_anatomy";
+import * as shapes from "./avatar/handshapes";
 import { DecisionLogPanel, loadLog } from "./decision_log_panel/panel";
 
 async function main() {
@@ -39,7 +42,8 @@ async function main() {
     `sequence &nbsp;${timeline.map((t:any)=>t.gloss).join(" ")}<br>` +
     `${seq.frameCount} frames @ ${seq.fps}fps (${(seq.frameCount / seq.fps).toFixed(2)}s)<br>` +
     `bones mapped &nbsp;${avatar.report.mappedCount}/${avatar.report.boneCount} &nbsp;` +
-    `rig ${avatar.report.poseType}`;
+    `rig ${avatar.report.poseType}<br>` +
+    `handshapes &nbsp;${VOCABULARY.length} canonical &nbsp;·&nbsp; fingers solved as constrained joints`;
 
   const scrub = document.getElementById("scrub") as HTMLInputElement;
   const playButton = document.getElementById("play") as HTMLButtonElement;
@@ -49,15 +53,26 @@ async function main() {
   let frame = 0, playing = true, last = performance.now(), accumulator = 0;
   let speed = 1.0;
 
-  // aim() solves each bone directly from its rest pose, so one pass is exact
-  // and repeat calls are idempotent — no convergence loop needed.
-  const show = (index: number, _converge = false) => {
-    retargeter.applyFrame(seq, index);
+  // Arms solve directly from rest in one exact pass. Hands additionally carry
+  // temporal state (jitter filtering, handshape hysteresis), so frames must be
+  // fed in order and at a truthful dt — reset() is what breaks that continuity
+  // when the timeline jumps.
+  const show = (index: number, dt = 1 / seq.fps) => {
+    retargeter.applyFrame(seq, index, dt);
     avatar.gltfScene.updateMatrixWorld(true);
     renderer.render(scene, camera);
     const span = timeline.find((t:any)=> index>=t.start_frame && index<t.end_frame);
+    const hand = (side: "left" | "right") => {
+      const h = retargeter.lastHand[side];
+      if (!h?.shape) return "—";
+      // "~" marks a coasting hand: not tracked this frame, holding its last
+      // shape and settling toward neutral rather than snapping back to rest.
+      const mark = h.coasting ? "~" : "";
+      return `${mark}${h.shape.name} ${(h.snap * 100).toFixed(0)}%`;
+    };
     frameLabel.textContent =
-      `${span ? span.gloss : "\u2014"}  ·  frame ${String(index).padStart(3)}/${seq.frameCount - 1}  ·  ${retargeter.driven.size} bones  ·  ${retargeter.lastHandsSolved} hands`;
+      `${span ? span.gloss : "\u2014"}  ·  ${String(index).padStart(3)}/${seq.frameCount - 1}  ·  ` +
+      `L ${hand("left")}  ·  R ${hand("right")}`;
   };
 
   playButton.addEventListener("click", () => {
@@ -66,7 +81,7 @@ async function main() {
   });
   scrub.addEventListener("input", () => {
     playing = false; playButton.textContent = "❚❚ PAUSED";
-    frame = Number(scrub.value); retargeter.reset(); show(frame, true);
+    frame = Number(scrub.value); retargeter.reset(); show(frame);
   });
   // The supervisor override halts avatar output, exactly as it would live.
   const speedInput = document.getElementById("speed") as HTMLInputElement;
@@ -90,7 +105,9 @@ async function main() {
       while (accumulator >= step) {
         accumulator -= step;
         frame = (frame + 1) % seq.frameCount;
-        if (frame === 0) retargeter.reset();
+        // rewind(), not reset(): the wrap is a cut in playback, not in the
+        // signing, so the avatar sweeps across it rather than teleporting.
+        if (frame === 0) retargeter.rewind();
       }
       scrub.value = String(frame);
       show(frame);
@@ -104,7 +121,14 @@ async function main() {
     renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
   });
 
-  (window as any).__dbg = { avatar, retargeter, seq, THREE };
+  // Verification reads the *rendered* skeleton back through the same anatomy
+  // module that drove it, so scripts/verify_hands.mjs measures the rig rather
+  // than re-deriving what the solver believes it did.
+  (window as any).__dbg = { avatar, retargeter, seq, timeline, THREE, show, HANDSHAPES: VOCABULARY, anatomy, shapes, PoseRetargeter, scene, camera, renderer };
+  // Lets scripts/verify_hands.mjs re-render this scene from a second camera, so
+  // hand close-ups come out of the real pipeline rather than a parallel one.
+  // Pause playback first, or the render loop repaints over it.
+  (window as any).__render2 = (c: THREE.Camera) => renderer.render(scene, c);
   (window as any).__ready = true;
   (window as any).__info = { frames: seq.frameCount, logEntries: panel.count, bones: avatar.report.mappedCount };
 }

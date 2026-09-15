@@ -42,10 +42,20 @@ import numpy as np
 
 from backend.speech_to_sign.stt_input import SAMPLE_RATE, Transcript, TranscriptionError
 
-# Measured on the target machine by `scripts/benchmark_fallback.py`; see
-# `data/out/fallback_benchmark.json` for the recorded numbers (TNFR-7).
-# small.en is the default because it was the smallest model that kept word
-# error rate low enough to preserve the names and numbers FR-26 protects.
+# Chosen by measurement on this machine, not by size. Real numbers from
+# `scripts/benchmark_fallback.py` over 6.6s and 4.6s of speech carrying a name,
+# a number and a question (recorded in `data/out/fallback_benchmark.json`):
+#
+#   base.en-mlx        0.05-0.06s   RTF 0.01   WER 6.2-8.3%
+#   small.en-mlx       0.14-0.17s   RTF 0.03   WER 0.0%     <- default
+#   large-v3-turbo     0.69s        RTF 0.10   WER 6.2-8.3%
+#
+# small.en wins outright: perfect transcription, and four times faster than the
+# large model. The larger model is not more accurate here — its errors and
+# base.en's are the same kind, writing "7" and "4 o'clock" where the reference
+# says "seven" and "four o'clock". That is a formatting difference rather than a
+# misheard word, and it costs nothing downstream, but it is what the WER column
+# is counting. Every model kept the proper noun.
 DEFAULT_MODEL = "mlx-community/whisper-small.en-mlx"
 
 MAX_TRANSCRIPT_CHARS = 2_000

@@ -88,6 +88,25 @@ def reconstruct_sentence(
     if not 0.0 <= confidence <= 1.0:
         raise ReasoningError(f"confidence {confidence} outside 0.0-1.0")
 
+    # Stage 2 (T2.4) routing check: while degraded, reason locally instead.
+    # The local model's output gets the same `_validate` boundary check the
+    # remote one's does — being local makes it no more trustworthy.
+    from backend.resilience import safe_mode
+
+    if safe_mode.is_active():
+        from backend.resilience.llm_fallback import LlmFallbackError, complete_verbose
+
+        try:
+            completion = complete_verbose(f"Gloss: {gloss}", system=SYSTEM_PROMPT)
+        except LlmFallbackError as exc:
+            raise ReasoningError(f"local reasoning fallback failed for {gloss!r}: {exc}") from exc
+        return Reconstruction(
+            sentence=_validate(completion.text, gloss),
+            gloss=gloss,
+            model=completion.model,
+            latency_s=completion.latency_s,
+        )
+
     started = time.monotonic()
     try:
         response = get_client().chat.completions.create(

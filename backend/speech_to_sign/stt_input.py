@@ -155,7 +155,19 @@ class PauseChunker:
 
 
 def transcribe(audio: np.ndarray | bytes, *, model: str = STT_MODEL) -> Transcript:
-    """Transcribe one utterance via Groq Whisper."""
+    """Transcribe one utterance via Groq Whisper, or locally while degraded.
+
+    Stage 2 (T2.4) routing check. The fallback returns this same `Transcript`,
+    so nothing downstream branches on which path served the audio — only the
+    `model` field differs, and that is there so the decision log can say so.
+    """
+    from backend.resilience import safe_mode
+
+    if safe_mode.is_active():
+        from backend.resilience import stt_fallback
+
+        return stt_fallback.transcribe(audio)
+
     wav = pcm_to_wav(audio) if isinstance(audio, np.ndarray) else audio
     duration = (len(wav) - 44) / (SAMPLE_RATE * 2)
     started = time.monotonic()
@@ -193,7 +205,12 @@ def stream_transcripts(
     """
     import sounddevice as sd  # imported lazily so the module works without audio hardware
 
+    from backend.resilience.dedup_batch import Chunk, DedupBatcher
+
     chunker = PauseChunker()
+    # Stage 2 (T2.5). Filler is collapsed here, before a segment reaches the
+    # waterfall or costs a reasoning token — not generated and discarded later.
+    batcher = DedupBatcher()
     with sd.InputStream(
         samplerate=SAMPLE_RATE, channels=1, dtype="int16",
         blocksize=FRAME_SAMPLES, device=device,
@@ -210,7 +227,16 @@ def stream_transcripts(
             if not should_listen():
                 continue
             utterance = chunker.push(block[:, 0])
-            if utterance is not None:
-                transcript = transcribe(utterance)
-                if transcript.text:
-                    yield transcript
+            if utterance is None:
+                continue
+            transcript = transcribe(utterance)
+            if not transcript.text:
+                continue
+            for kept in batcher.push(Chunk(text=transcript.text, timestamp=time.time())):
+                # Ordering is preserved and only pure filler is ever dropped, so
+                # the transcript carried forward is the batched text with the
+                # original's timing and model attribution intact.
+                yield Transcript(
+                    text=kept.text, duration_s=transcript.duration_s,
+                    latency_s=transcript.latency_s, model=transcript.model,
+                )

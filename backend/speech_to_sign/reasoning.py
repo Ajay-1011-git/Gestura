@@ -137,6 +137,25 @@ def to_gloss(
             vocabulary=", ".join(sorted({v.strip().upper() for v in vocabulary}))
         )
 
+    # Stage 2 (T2.4) routing check: while degraded, gloss locally instead. The
+    # vocabulary prompt goes to the local model too — a fallback that glosses
+    # from general knowledge would invent tokens this deployment cannot render,
+    # which is the exact failure VOCABULARY_PROMPT exists to prevent.
+    from backend.resilience import safe_mode
+
+    if safe_mode.is_active():
+        from backend.resilience.llm_fallback import LlmFallbackError, complete_verbose
+
+        try:
+            completion = complete_verbose(transcript, system=prompt)
+        except LlmFallbackError as exc:
+            raise GlossError(f"local gloss fallback failed for {transcript!r}: {exc}") from exc
+        gloss, tokens = _validate(completion.text, transcript)
+        return GlossResult(
+            gloss=gloss, tokens=tokens, transcript=transcript,
+            model=completion.model, latency_s=completion.latency_s,
+        )
+
     started = time.monotonic()
     try:
         response = get_client().chat.completions.create(

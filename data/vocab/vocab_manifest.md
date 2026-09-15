@@ -149,8 +149,25 @@ tsm, ukl`. **`ins` (Indian Sign Language) is not among them** — `ise` is
 bundled**, so an out-of-vocabulary term will currently resolve `UNMATCHED`
 rather than `FINGERSPELLING`.
 
+**RESOLVED 2026-09-15 (T1.9): option 3 taken — out-of-vocabulary terms resolve
+`UNMATCHED`.** A real ISL manual alphabet *was* located —
+[`Hemg/Indian_sign_language_dataset`](https://huggingface.co/datasets/Hemg/Indian_sign_language_dataset),
+42,745 images over A–Z plus digits 1–9, and visually confirmed to be genuine
+**two-handed** ISL rather than a mislabelled ASL set. It was rejected as a
+lexicon source for a concrete reason: the images are 128×128 crops of hands
+alone, with no torso or arms. Every other pose in this project carries
+`POSE_LANDMARKS`, which is what lets the avatar place hands in signing space;
+manufacturing a body for these would mean inventing data the source does not
+contain — the exact fabrication the project exists to refuse. MediaPipe
+detection on the crops is also inconsistent, finding only one of two hands on
+several letters.
+
+Recorded for a later phase: the dataset is a viable fingerspelling source for
+anyone willing to do the body-placement work properly, which is a piece of real
+engineering rather than a config change.
+
 Demo scene 4 is described in architecture v3 §10 as "the strongest 25 seconds."
-Three options, to decide before T1.9:
+Three options, considered before T1.9:
 
 1. Build a minimal ISL manual-alphabet lexicon. ISL uses a **two-handed**
    alphabet, structurally unlike ASL's one-handed one, so ASL poses are not a

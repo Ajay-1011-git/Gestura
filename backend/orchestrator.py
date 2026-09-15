@@ -301,8 +301,16 @@ class Interpreter:
             renderable, self.lookup.lexicon_dir, target_fps=RENDER_FPS
         ) if renderable else (None, [])
 
-        # T2.6: terms with no sign are spelled rather than dropped. Appended
-        # after the signed portion, in the order the gloss put them.
+        # T2.6: terms with no sign are spelled rather than dropped.
+        #
+        # Known limitation, stated rather than hidden: spelled terms are appended
+        # after *all* the signed content, not interleaved at their gloss
+        # position. "HELLO AJAY" comes out right because the spelled term is
+        # already last; "AJAY HELLO" would come out reordered. Interleaving
+        # needs build_avatar_sequence to accept a mixed signed/spelled timeline,
+        # and that function is Stage 1's — out of scope here (§B.3). The gloss
+        # text and the coverage report both carry the true order, so the panel
+        # shows what was meant even when the avatar's ordering is coarse.
         spelled = self._fingerspell_tokens(spellable, segment)
         pose = _join_poses(pose, [s.pose for s in spelled if s.pose is not None])
         if pose is None:

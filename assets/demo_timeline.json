@@ -1,0 +1,30 @@
+[
+  {
+    "gloss": "HELLO",
+    "start_frame": 0,
+    "end_frame": 111,
+    "start_s": 0.0,
+    "duration_s": 3.7
+  },
+  {
+    "gloss": "YOU",
+    "start_frame": 120,
+    "end_frame": 182,
+    "start_s": 4.0,
+    "duration_s": 2.067
+  },
+  {
+    "gloss": "SIT",
+    "start_frame": 191,
+    "end_frame": 260,
+    "start_s": 6.367,
+    "duration_s": 2.3
+  },
+  {
+    "gloss": "PLEASE",
+    "start_frame": 269,
+    "end_frame": 364,
+    "start_s": 8.967,
+    "duration_s": 3.167
+  }
+]

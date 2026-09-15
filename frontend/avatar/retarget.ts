@@ -1,42 +1,38 @@
 /**
- * Kalidokit retargeting — playback of looked-up pose sequences (T1.12).
+ * Pose retargeting — playback of looked-up pose sequences (T1.12).
  *
- * This is the Speech->Sign direction only. It replays `.pose` sequences produced
- * by T1.9/T1.10 onto the avatar loaded in T1.11. **No live camera feed is wired
- * here**: the Sign->Speech direction extracts landmarks for recognition and does
- * not render an avatar at all.
+ * Speech->Sign direction only. No live camera feed is wired here.
  *
- * Four things measured from the real data rather than assumed, each of which
- * changed the implementation:
+ * **Why this does direct aim retargeting instead of using Kalidokit's solvers.**
+ * Both were tried against the real data and both failed visibly:
  *
- *  1. `spoken-to-signed-translation` **reduces** POSE_LANDMARKS from 33 points
- *     to 8 — shoulders, elbows, wrists, hips — and legs are not among them.
- *  2. It also **flattens depth**: every retained Z is ~256, a constant. That is
- *     what forced arms off Kalidokit's pose solver and onto 2D aim; see
- *     `ARM_CHAINS`. Hands keep Kalidokit, whose solver has real intra-hand
- *     geometry to work with.
- *  3. The rig is an **A-pose** (~39.7° droop, measured in T1.11) while Kalidokit
- *     solves against a T-pose reference, so hand rotations are composed onto the
- *     captured rest pose rather than replacing it. See `applyEuler`.
- *  4. `pose-format`'s JS `body.frames` is a Proxy over the binary buffer, not
- *     the array its own type declaration promises. See `loadPoseSequence`.
+ *  - Kalidokit's output is expressed in VRM's humanoid axis convention against a
+ *    T-pose rest. This rig is a Mixamo-named glTF resting in an A-pose (~39.7°
+ *    droop, measured in T1.11). Applying those Eulers — replaced or composed
+ *    onto rest — snapped the arms to a T-pose spread instead of signing.
+ *  - The landmark scales are inconsistent: `.pose` stores x and y in pixels but
+ *    leaves z in MediaPipe's normalised units, so z is ~1/500th the magnitude of
+ *    x and y. Anything reading them as one 3D space sees a flat plane. Depth is
+ *    real, but only after `z * width`.
+ *
+ * Aiming each bone along the direction between its two landmarks sidesteps both.
+ * It works from the rig's own rest geometry, so it needs no axis convention, and
+ * it drives fingers the same way it drives arms — which is what makes handshapes
+ * actually readable rather than folded.
  */
 
 import * as THREE from "three";
-import { Hand as KalidoHand } from "kalidokit";
 import type { HumanoidBone, LoadedAvatar } from "./loader";
 
-/** MediaPipe pose indices for the 8 landmarks the lexicon retains. */
-const POSE_INDEX: Record<string, number> = {
-  LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
-  LEFT_ELBOW: 13, RIGHT_ELBOW: 14,
-  LEFT_WRIST: 15, RIGHT_WRIST: 16,
-  LEFT_HIP: 23, RIGHT_HIP: 24,
-};
-const MEDIAPIPE_POSE_LANDMARKS = 33;
-
 interface PosePoint { X: number; Y: number; Z?: number; C?: number }
-interface Landmark { x: number; y: number; z: number; visibility: number }
+
+export interface SignSpan {
+  gloss: string;
+  start_frame: number;
+  end_frame: number;
+  start_s: number;
+  duration_s: number;
+}
 
 export interface PoseSequence {
   fps: number;
@@ -47,7 +43,6 @@ export interface PoseSequence {
   frames: Record<string, PosePoint[]>[];
 }
 
-/** Load and parse a `.pose` file using the format's own JS reader. */
 export async function loadPoseSequence(url: string): Promise<PoseSequence> {
   const { Pose } = await import("pose-format");
   const parsed: any = await Pose.fromRemote(url);
@@ -58,10 +53,9 @@ export async function loadPoseSequence(url: string): Promise<PoseSequence> {
     componentPoints[component.name] = component.points;
   }
 
-  // `body.frames` is a Proxy over the binary buffer, not the array its own
-  // .d.ts declares: Object.keys() is empty and .map() does not exist, but
-  // integer indexing works and `_frames` carries the count. Verified against
-  // pose-format@1.6.2 on 2026-09-15.
+  // `body.frames` is a Proxy over the binary buffer, not the array its .d.ts
+  // declares: Object.keys() is empty and .map() does not exist, but integer
+  // indexing works and `_frames` holds the count (pose-format@1.6.2).
   const frameCount: number = parsed.body._frames ?? 0;
   const frames: Record<string, PosePoint[]>[] = [];
   for (let i = 0; i < frameCount; i++) {
@@ -79,208 +73,171 @@ export async function loadPoseSequence(url: string): Promise<PoseSequence> {
   };
 }
 
-function normalise(point: PosePoint, width: number, height: number): Landmark {
-  return {
-    x: point.X / (width || 1),
-    y: point.Y / (height || 1),
-    z: (point.Z ?? 0) / (width || 1),
-    visibility: point.C ?? 0,
-  };
-}
+/** MediaPipe hand landmark indices. */
+const H = {
+  WRIST: 0,
+  THUMB_CMC: 1, THUMB_MCP: 2, THUMB_IP: 3, THUMB_TIP: 4,
+  INDEX_MCP: 5, INDEX_PIP: 6, INDEX_DIP: 7, INDEX_TIP: 8,
+  MIDDLE_MCP: 9, MIDDLE_PIP: 10, MIDDLE_DIP: 11, MIDDLE_TIP: 12,
+  RING_MCP: 13, RING_PIP: 14, RING_DIP: 15, RING_TIP: 16,
+  PINKY_MCP: 17, PINKY_PIP: 18, PINKY_DIP: 19, PINKY_TIP: 20,
+} as const;
 
-/**
- * Rebuild a 33-slot MediaPipe pose array from the lexicon's 8 retained points.
- *
- * Kalidokit reads landmarks by index, so scattering matters: a dense 8-element
- * array would put the left shoulder where the nose belongs and still "work",
- * producing confident nonsense.
- */
-export function toMediaPipePose(
-  frame: Record<string, PosePoint[]>,
-  componentPoints: Record<string, string[]>,
-  width: number,
-  height: number,
-): Landmark[] {
-  const empty: Landmark = { x: 0, y: 0, z: 0, visibility: 0 };
-  const out: Landmark[] = Array.from({ length: MEDIAPIPE_POSE_LANDMARKS }, () => ({ ...empty }));
-
-  const points = frame["POSE_LANDMARKS"] ?? [];
-  const names = componentPoints["POSE_LANDMARKS"] ?? [];
-  names.forEach((name, i) => {
-    const index = POSE_INDEX[name];
-    if (index !== undefined && points[i]) out[index] = normalise(points[i], width, height);
-  });
-  return out;
-}
-
-export function toHandLandmarks(
-  frame: Record<string, PosePoint[]>,
-  component: "LEFT_HAND_LANDMARKS" | "RIGHT_HAND_LANDMARKS",
-  width: number,
-  height: number,
-): Landmark[] | null {
-  const points = frame[component];
-  if (!points || points.length < 21) return null;
-  if (points.every((p) => (p.C ?? 0) === 0)) return null;   // hand not tracked this frame
-  return points.map((p) => normalise(p, width, height));
-}
-
-/**
- * Arm chains driven by 2D aim rather than Kalidokit's pose solver.
- *
- * **Why Kalidokit.Pose.solve is not used for arms.** Measured on the real
- * lexicon output on 2026-09-15: every POSE_LANDMARKS Z value is ~256, a
- * constant — `spoken-to-signed-translation` flattens depth when it reduces the
- * pose. Kalidokit's arm solver works in 3D, so with a degenerate depth plane it
- * clamps to a fixed ±1.25 rad and returns the *same* rotation on every frame.
- * That is not a Kalidokit defect; it is being handed data it cannot solve.
- *
- * Aiming each bone along the 2D shoulder→elbow→wrist direction uses the signal
- * that is actually present. For a front-facing signing avatar the image plane
- * carries nearly all of it. Kalidokit is still used for the hands (below),
- * where intra-hand geometry is real and its solver works.
- */
-const ARM_CHAINS: ReadonlyArray<readonly [HumanoidBone, HumanoidBone, string, string]> = [
-  ["leftUpperArm", "leftLowerArm", "LEFT_SHOULDER", "LEFT_ELBOW"],
-  ["leftLowerArm", "leftHand", "LEFT_ELBOW", "LEFT_WRIST"],
-  ["rightUpperArm", "rightLowerArm", "RIGHT_SHOULDER", "RIGHT_ELBOW"],
-  ["rightLowerArm", "rightHand", "RIGHT_ELBOW", "RIGHT_WRIST"],
-];
-
-function handBone(key: string): HumanoidBone | undefined {
-  // "LeftIndexProximal" -> "leftIndexProximal"; "LeftWrist" maps to the hand bone.
-  if (/^(Left|Right)Wrist$/.test(key)) {
-    return (key.startsWith("Left") ? "leftHand" : "rightHand") as HumanoidBone;
-  }
-  const camel = key.charAt(0).toLowerCase() + key.slice(1);
-  return camel as HumanoidBone;
+/** Finger bone chains, parent first. Driving all three segments is what makes a
+ *  handshape legible; driving only the proximal joint leaves fingers looking
+ *  folded regardless of the source data. */
+function fingerChain(side: "left" | "right"): Array<[HumanoidBone, number, number]> {
+  const s = side;
+  return [
+    [`${s}ThumbProximal` as HumanoidBone, H.THUMB_CMC, H.THUMB_MCP],
+    [`${s}ThumbIntermediate` as HumanoidBone, H.THUMB_MCP, H.THUMB_IP],
+    [`${s}ThumbDistal` as HumanoidBone, H.THUMB_IP, H.THUMB_TIP],
+    [`${s}IndexProximal` as HumanoidBone, H.INDEX_MCP, H.INDEX_PIP],
+    [`${s}IndexIntermediate` as HumanoidBone, H.INDEX_PIP, H.INDEX_DIP],
+    [`${s}IndexDistal` as HumanoidBone, H.INDEX_DIP, H.INDEX_TIP],
+    [`${s}MiddleProximal` as HumanoidBone, H.MIDDLE_MCP, H.MIDDLE_PIP],
+    [`${s}MiddleIntermediate` as HumanoidBone, H.MIDDLE_PIP, H.MIDDLE_DIP],
+    [`${s}MiddleDistal` as HumanoidBone, H.MIDDLE_DIP, H.MIDDLE_TIP],
+    [`${s}RingProximal` as HumanoidBone, H.RING_MCP, H.RING_PIP],
+    [`${s}RingIntermediate` as HumanoidBone, H.RING_PIP, H.RING_DIP],
+    [`${s}RingDistal` as HumanoidBone, H.RING_DIP, H.RING_TIP],
+    [`${s}LittleProximal` as HumanoidBone, H.PINKY_MCP, H.PINKY_PIP],
+    [`${s}LittleIntermediate` as HumanoidBone, H.PINKY_PIP, H.PINKY_DIP],
+    [`${s}LittleDistal` as HumanoidBone, H.PINKY_DIP, H.PINKY_TIP],
+  ];
 }
 
 export interface RetargetOptions {
-  /** Compose solved rotations onto the rig's rest pose instead of replacing it.
-   *  Required for this A-pose rig; a T-pose rig could set it false. */
-  composeWithRest?: boolean;
-  /** 0..1 slerp factor per frame; damps jitter without lagging the motion. */
+  /** Slerp factor per frame. Lower damps jitter but lags fast motion. */
   smoothing?: number;
+  /** How much the (small-magnitude) z channel is trusted, relative to x/y. */
+  depthScale?: number;
+  /** Metres of forward offset applied to the whole upper body, so signing
+   *  happens in front of the chest rather than intersecting it. */
+  forwardBias?: number;
 }
 
 export class PoseRetargeter {
   private readonly avatar: LoadedAvatar;
-  private readonly composeWithRest: boolean;
   private readonly smoothing: number;
-  /** Bones this retargeter has actually written to — used by VERIFY. */
+  private readonly depthScale: number;
+  private readonly forwardBias: number;
   readonly driven = new Set<HumanoidBone>();
+  lastHandsSolved = 0;
 
   constructor(avatar: LoadedAvatar, options: RetargetOptions = {}) {
     this.avatar = avatar;
-    this.composeWithRest = options.composeWithRest ?? true;
-    this.smoothing = options.smoothing ?? 0.45;
-  }
-
-  private applyEuler(name: HumanoidBone, rotation: { x: number; y: number; z: number }): void {
-    const bone = this.avatar.bones.get(name);
-    if (!bone) return;
-
-    const target = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(rotation.x, rotation.y, rotation.z, "XYZ"),
-    );
-
-    // Kalidokit's output is expressed against a T-pose reference. This rig rests
-    // in an A-pose, so composing onto the rest rotation keeps the rig's own
-    // shoulder geometry instead of snapping limbs to a T-pose they never had.
-    if (this.composeWithRest) {
-      const rest = this.avatar.restPose.get(name);
-      if (rest) target.premultiply(rest.quaternion);
-    }
-
-    bone.quaternion.slerp(target, this.smoothing);
-    this.driven.add(name);
+    this.smoothing = options.smoothing ?? 0.4;
+    this.depthScale = options.depthScale ?? 1.0;
+    this.forwardBias = options.forwardBias ?? 0.35;
   }
 
   /**
-   * Aim a bone along a direction taken from the 2D landmarks.
+   * Convert a landmark to the avatar's world axes.
    *
-   * Image space is x-right / y-down; world space here is x-right / y-up, so y is
-   * flipped. The avatar faces +Z and its left side is at +X (measured in T1.11),
-   * which matches how a front-facing signer's left appears at larger image x —
-   * so x needs no mirroring.
+   * `.pose` x/y are pixels while z stays in MediaPipe's normalised units, so z
+   * is multiplied by the frame width to bring it onto the same scale. Image y
+   * runs downward and the avatar's +Y is up, so y is negated. The avatar faces
+   * +Z with its left at +X (measured in T1.11), matching how a front-facing
+   * signer's left appears at larger image x — so x needs no mirroring.
    */
-  private aimBone(
-    name: HumanoidBone,
-    from: { x: number; y: number },
-    to: { x: number; y: number },
-  ): boolean {
+  private toWorld(point: PosePoint, sequence: PoseSequence): THREE.Vector3 {
+    return new THREE.Vector3(
+      point.X,
+      -point.Y,
+      -(point.Z ?? 0) * sequence.width * this.depthScale,
+    );
+  }
+
+  /** Rotate a bone so its rest direction points along `target`. */
+  private aim(name: HumanoidBone, target: THREE.Vector3, bias = 0): boolean {
     const bone = this.avatar.bones.get(name);
-    const rest = this.avatar.restPose.get(name);
-    if (!bone || !rest || !bone.parent) return false;
+    if (!bone || !bone.parent || target.lengthSq() < 1e-9) return false;
 
-    const target = new THREE.Vector3(to.x - from.x, -(to.y - from.y), 0);
-    if (target.lengthSq() < 1e-8) return false;
-    target.normalize();
+    const direction = target.clone().normalize();
+    if (bias) direction.z += bias, direction.normalize();
 
-    // Rest direction of this bone in world space: toward its first child.
+    // Rest direction is normally bone -> first child bone. Distal fingertip
+    // bones are leaves with no child, which would skip the last joint of every
+    // finger and leave fingertips permanently uncurled — 15 of 20 hand bones
+    // driven instead of all 20. For a leaf, the parent -> bone direction
+    // continues the chain and is the right reference.
+    const origin = bone.getWorldPosition(new THREE.Vector3());
     const child = bone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
-    if (!child) return false;
     const restDirection = child
-      .getWorldPosition(new THREE.Vector3())
-      .sub(bone.getWorldPosition(new THREE.Vector3()));
-    if (restDirection.lengthSq() < 1e-8) return false;
+      ? child.getWorldPosition(new THREE.Vector3()).sub(origin)
+      : origin.clone().sub(bone.parent.getWorldPosition(new THREE.Vector3()));
+    if (restDirection.lengthSq() < 1e-9) return false;
     restDirection.normalize();
 
-    const delta = new THREE.Quaternion().setFromUnitVectors(restDirection, target);
+    const delta = new THREE.Quaternion().setFromUnitVectors(restDirection, direction);
     const world = bone.getWorldQuaternion(new THREE.Quaternion()).premultiply(delta);
-    const parentWorld = bone.parent.getWorldQuaternion(new THREE.Quaternion());
-    const local = parentWorld.invert().multiply(world);
+    const local = bone.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(world);
 
     bone.quaternion.slerp(local, this.smoothing);
     this.driven.add(name);
     return true;
   }
 
-  /** Solve and apply one frame. Returns how many bones were written. */
   applyFrame(sequence: PoseSequence, index: number): number {
     const frame = sequence.frames[index];
     if (!frame) return 0;
     let written = 0;
 
-    const names = sequence.componentPoints["POSE_LANDMARKS"] ?? [];
-    const points = frame["POSE_LANDMARKS"] ?? [];
-    const byName: Record<string, PosePoint> = {};
-    names.forEach((n, i) => { if (points[i]) byName[n] = points[i]; });
+    const poseNames = sequence.componentPoints["POSE_LANDMARKS"] ?? [];
+    const posePoints = frame["POSE_LANDMARKS"] ?? [];
+    const body: Record<string, PosePoint> = {};
+    poseNames.forEach((n, i) => { if (posePoints[i]) body[n] = posePoints[i]; });
 
-    for (const [bone, , fromName, toName] of ARM_CHAINS) {
-      const from = byName[fromName];
-      const to = byName[toName];
-      if (!from || !to || (from.C ?? 0) === 0 || (to.C ?? 0) === 0) continue;
+    const tracked = (p?: PosePoint) => p && (p.C ?? 0) > 0;
+    const vec = (a: string, b: string) =>
+      this.toWorld(body[b], sequence).sub(this.toWorld(body[a], sequence));
+
+    // Arms, parent before child so each aim reads an up-to-date world matrix.
+    const arms: Array<[HumanoidBone, string, string, number]> = [
+      ["leftUpperArm", "LEFT_SHOULDER", "LEFT_ELBOW", this.forwardBias],
+      ["leftLowerArm", "LEFT_ELBOW", "LEFT_WRIST", 0],
+      ["rightUpperArm", "RIGHT_SHOULDER", "RIGHT_ELBOW", this.forwardBias],
+      ["rightLowerArm", "RIGHT_ELBOW", "RIGHT_WRIST", 0],
+    ];
+    for (const [bone, from, to, bias] of arms) {
+      if (!tracked(body[from]) || !tracked(body[to])) continue;
       this.avatar.gltfScene.updateMatrixWorld(true);
-      if (this.aimBone(bone, { x: from.X, y: from.Y }, { x: to.X, y: to.Y })) written += 1;
+      if (this.aim(bone, vec(from, to), bias)) written += 1;
     }
 
+    // Hands: wrist orientation first, then every finger segment.
+    this.lastHandsSolved = 0;
     for (const [component, side] of [
-      ["LEFT_HAND_LANDMARKS", "Left"],
-      ["RIGHT_HAND_LANDMARKS", "Right"],
+      ["LEFT_HAND_LANDMARKS", "left"],
+      ["RIGHT_HAND_LANDMARKS", "right"],
     ] as const) {
-      const landmarks = toHandLandmarks(frame, component, sequence.width, sequence.height);
-      if (!landmarks) continue;
-      const hand = KalidoHand.solve(landmarks as any, side);
-      if (!hand) continue;
-      for (const [key, rotation] of Object.entries(hand as Record<string, any>)) {
-        const bone = handBone(key);
-        if (bone && rotation && typeof rotation.x === "number") {
-          this.applyEuler(bone, rotation);
-          written += 1;
-        }
+      const points = frame[component];
+      if (!points || points.length < 21) continue;
+      if (points.every((p) => (p.C ?? 0) === 0)) continue;
+      this.lastHandsSolved += 1;
+
+      const at = (i: number) => this.toWorld(points[i], sequence);
+
+      this.avatar.gltfScene.updateMatrixWorld(true);
+      if (this.aim(`${side}Hand` as HumanoidBone, at(H.MIDDLE_MCP).sub(at(H.WRIST)))) written += 1;
+
+      for (const [bone, from, to] of fingerChain(side)) {
+        if ((points[from]?.C ?? 0) === 0 || (points[to]?.C ?? 0) === 0) continue;
+        this.avatar.gltfScene.updateMatrixWorld(true);
+        if (this.aim(bone, at(to).sub(at(from)))) written += 1;
       }
     }
 
     return written;
   }
 
-  /** Reset every driven bone to its captured rest rotation. */
+  /** Return every driven bone to its captured rest rotation. */
   reset(): void {
     for (const [name, rest] of this.avatar.restPose) {
       this.avatar.bones.get(name)?.quaternion.copy(rest.quaternion);
     }
     this.driven.clear();
+    this.lastHandsSolved = 0;
   }
 }

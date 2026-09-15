@@ -222,8 +222,30 @@ def stream_transcripts(
             calibration.append(block[:, 0])
         chunker.calibrate(calibration)
 
+        def _released(chunk: Chunk) -> Transcript:
+            """Rebuild a Transcript for a chunk the batcher let through.
+
+            Ordering is preserved and only pure filler is ever dropped, so the
+            text is the batched text; the timing and model attribution come from
+            the chunk's own source transcript rather than from whichever one
+            happens to be in scope, which matters for a chunk released a beat
+            after the one that produced it.
+            """
+            source = chunk.meta if isinstance(chunk.meta, Transcript) else None
+            return Transcript(
+                text=chunk.text,
+                duration_s=source.duration_s if source else 0.0,
+                latency_s=source.latency_s if source else 0.0,
+                model=source.model if source else STT_MODEL,
+            )
+
         while True:
             block, _ = stream.read(FRAME_SAMPLES)
+            # Release anything the batcher has held past its window, every frame.
+            # Without this a held chunk waits for the next utterance, which may
+            # never come — and FR-26 does not allow losing it (T2.5).
+            for kept in batcher.due(time.time()):
+                yield _released(kept)
             if not should_listen():
                 continue
             utterance = chunker.push(block[:, 0])
@@ -232,11 +254,6 @@ def stream_transcripts(
             transcript = transcribe(utterance)
             if not transcript.text:
                 continue
-            for kept in batcher.push(Chunk(text=transcript.text, timestamp=time.time())):
-                # Ordering is preserved and only pure filler is ever dropped, so
-                # the transcript carried forward is the batched text with the
-                # original's timing and model attribution intact.
-                yield Transcript(
-                    text=kept.text, duration_s=transcript.duration_s,
-                    latency_s=transcript.latency_s, model=transcript.model,
-                )
+            chunk = Chunk(text=transcript.text, timestamp=time.time(), meta=transcript)
+            for kept in batcher.push(chunk):
+                yield _released(kept)

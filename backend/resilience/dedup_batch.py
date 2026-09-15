@@ -66,10 +66,17 @@ _INTERIOR_CAPITAL = re.compile(r"(?<!^)(?<![.!?]\s)\b[A-Z][a-z]+")
 
 @dataclass(frozen=True)
 class Chunk:
-    """One STT result, as it comes off the chunker."""
+    """One STT result, as it comes off the chunker.
+
+    ``meta`` carries whatever the caller needs to reconstruct its own record for
+    this chunk — the live loop puts the source `Transcript` here so a chunk
+    released later still reports the real duration, latency and model rather
+    than whichever transcript happened to be in scope at release time.
+    """
 
     text: str
     timestamp: float = 0.0
+    meta: object | None = None
 
     @property
     def words(self) -> list[str]:
@@ -238,6 +245,24 @@ class DedupBatcher:
         pending, self._pending = self._pending, None
         self.stats.emitted += 1
         return [pending]
+
+    def due(self, now: float) -> list[Chunk]:
+        """Release a held chunk once its batch window has passed.
+
+        A chunk is held back only to see whether the *next* one continues it.
+        Without this, "I need" waits for whatever is said next — which in a real
+        conversation might be a minute away, or never, if the call ends there.
+        Both outcomes are wrong: the first delays output indefinitely, and the
+        second drops substantive content, which FR-26 forbids outright.
+
+        The live loop calls this on every audio frame, so the wait is bounded by
+        the batch window rather than by the speaker.
+        """
+        if self._pending is None:
+            return []
+        if self._pending.timestamp and now - self._pending.timestamp <= self.batch_window_s:
+            return []
+        return self._flush_pending()
 
     def flush(self) -> list[Chunk]:
         """Emit anything still held back. Always call at end of stream."""

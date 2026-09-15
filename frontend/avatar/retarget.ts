@@ -904,6 +904,13 @@ export class PoseRetargeter {
     }
     this.driven.clear();
     this.lastHandsSolved = 0;
+    // Cleared every frame, so the elbow search and the shoulder roll can only
+    // act on an arm that was actually solved *this* frame. A hand can be tracked
+    // on a frame where the body landmarks behind the arm were not; re-aiming at
+    // the previous frame's target would then drag the wrist off its solution,
+    // which is the one thing the elbow search must never do.
+    this.armTarget.left = this.armTarget.right = null;
+    this.armElbow.left = this.armElbow.right = null;
   }
 
   /**

@@ -182,6 +182,7 @@ def build_avatar_sequence(
     *,
     transition_s: float = 0.30,
     hold_s: float = 0.35,
+    target_fps: "float | None" = None,
 ) -> "tuple[Pose, list[dict]]":
     """Concatenate lexicon poses for the avatar, **preserving real 3D depth**.
 
@@ -199,6 +200,16 @@ def build_avatar_sequence(
     Each sign is trimmed to its active signing segment, held briefly so it reads
     as a discrete sign rather than a blur, and linked to the next by an
     interpolated transition.
+
+    **`target_fps` resamples here, with the timeline, rather than afterwards.**
+    The lexicon runs at 25fps and the renderer at 30, so resampling is required —
+    but the timeline's fields are *frame indices*, and resampling renominates
+    every one of them. Doing the two steps separately is how the committed demo
+    assets came to disagree: a 234-frame timeline paired with the 281-frame pose
+    it describes, every span landing 20% early, so the index point in YOU sat at
+    frames 66-72 while its span claimed 50-95. Returning a pose and a timeline
+    that cannot be at different frame rates removes that failure mode rather
+    than documenting it.
     """
     import csv as _csv
 
@@ -267,6 +278,22 @@ def build_avatar_sequence(
     combined.body.data = np.ma.array(np.concatenate(clips))
     combined.body.confidence = np.concatenate(confidences)
     combined.body.fps = fps
+
+    if target_fps is not None and abs(target_fps - fps) > 1e-6:
+        source_frames = int(combined.body.data.shape[0])
+        combined = resample(combined, target_fps)
+        out_frames = int(combined.body.data.shape[0])
+        # The exact map `resample` applies: it spreads `linspace(0, n-1, m)` over
+        # the source, so source index s lands at s*(m-1)/(n-1).
+        scale = (out_frames - 1) / max(1, source_frames - 1)
+        for entry in timeline:
+            entry["start_frame"] = int(round(entry["start_frame"] * scale))
+            entry["end_frame"] = min(out_frames, int(round(entry["end_frame"] * scale)))
+            entry["start_s"] = round(entry["start_frame"] / target_fps, 3)
+            entry["duration_s"] = round(
+                (entry["end_frame"] - entry["start_frame"]) / target_fps, 3
+            )
+
     return combined, timeline
 
 

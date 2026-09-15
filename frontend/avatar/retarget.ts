@@ -127,15 +127,23 @@ function basis(forward: THREE.Vector3, side: THREE.Vector3): THREE.Matrix4 {
 export interface RetargetOptions {
   /** How much the (small-magnitude) z channel is trusted, relative to x/y. */
   depthScale?: number;
-  /** Forward offset applied to wrist targets, as a fraction of shoulder span,
-   *  so signing happens in front of the chest rather than intersecting it. */
-  forwardBias?: number;
+  /**
+   * Minimum clearance in front of the torso for any wrist target, as a multiple
+   * of the measured torso half-depth.
+   *
+   * A hard clamp rather than an additive bias. Depth in the source is weak and
+   * noisy, so a bias large enough to clear the chest on bad frames overshoots on
+   * good ones; a clamp only acts when the target would actually intersect.
+   * Signing happens in front of the body, always, so this is a real constraint
+   * rather than a fudge factor.
+   */
+  torsoClearance?: number;
 }
 
 export class PoseRetargeter {
   private readonly avatar: LoadedAvatar;
   private readonly depthScale: number;
-  private readonly forwardBias: number;
+  private readonly torsoClearance: number;
   readonly driven = new Set<HumanoidBone>();
   lastHandsSolved = 0;
   /** Wrist target error in avatar units, for verification. */
@@ -144,6 +152,8 @@ export class PoseRetargeter {
   /** Avatar rest measurements, captured once at rest. */
   private rig: {
     shoulderSpan: number;
+    /** Z in front of which a wrist must stay to avoid entering the torso. */
+    torsoFrontZ: number;
     arm: Record<"left" | "right", { upper: number; lower: number }>;
     palmLocal: Record<"left" | "right", THREE.Matrix4>;
   } | null = null;
@@ -156,7 +166,7 @@ export class PoseRetargeter {
     // and below; 0.06 keeps depth span near 0.6x shoulder width, which is a
     // plausible amount of forward motion for signing.
     this.depthScale = options.depthScale ?? 0.06;
-    this.forwardBias = options.forwardBias ?? 0.12;
+    this.torsoClearance = options.torsoClearance ?? 1.15;
   }
 
   private worldPos(name: HumanoidBone): THREE.Vector3 {
@@ -190,8 +200,15 @@ export class PoseRetargeter {
         .multiply(world);
     }
 
+    // Torso depth measured from the mesh itself, so the clamp adapts to whatever
+    // avatar is loaded instead of assuming this rig's proportions.
+    const box = new THREE.Box3().setFromObject(this.avatar.gltfScene);
+    const chestZ = this.worldPos("chest").z;
+    const halfDepth = (box.max.z - box.min.z) / 2;
+
     this.rig = {
       shoulderSpan: this.worldPos("leftUpperArm").distanceTo(this.worldPos("rightUpperArm")),
+      torsoFrontZ: chestZ + halfDepth * this.torsoClearance,
       arm,
       palmLocal,
     };
@@ -341,14 +358,16 @@ export class PoseRetargeter {
     const avOrigin = this.worldPos("leftUpperArm")
       .add(this.worldPos("rightUpperArm"))
       .multiplyScalar(0.5);
-    const forward = rig.shoulderSpan * this.forwardBias;
-
-    const toAvatar = (p: PosePoint) =>
-      this.toWorld(p, sequence)
+    // Map into avatar space, then push forward only if the target would land
+    // inside the torso. Hands that already clear the chest are left alone.
+    const toAvatar = (p: PosePoint, clampToFront = false) => {
+      const v = this.toWorld(p, sequence)
         .sub(lmOrigin)
         .multiplyScalar(scale)
-        .add(avOrigin)
-        .add(new THREE.Vector3(0, 0, forward));
+        .add(avOrigin);
+      if (clampToFront) v.z = Math.max(v.z, rig.torsoFrontZ);
+      return v;
+    };
 
     this.lastReachError = 0;
     for (const side of ["left", "right"] as const) {
@@ -358,7 +377,7 @@ export class PoseRetargeter {
       if (!tracked(elbow) || !tracked(wrist)) continue;
       this.lastReachError = Math.max(
         this.lastReachError,
-        this.solveArm(side, toAvatar(wrist), toAvatar(elbow)),
+        this.solveArm(side, toAvatar(wrist, true), toAvatar(elbow, true)),
       );
       written += 2;
     }

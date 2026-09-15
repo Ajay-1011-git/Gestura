@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -376,10 +378,115 @@ def item_2_sign_to_speech_live() -> None:
     )
 
 
+# --------------------------------------------------------------- bridge ----
+def item_2_audible(frames_dir: Path | None) -> None:
+    """The other half of item 2: the sentence has to leave the machine.
+
+    OBS supplies only the video half. `virtualcam.py` documents why — OBS
+    Virtual Camera carries no audio and macOS ships no virtual microphone — so
+    the speech path needs a separate HAL driver, and this check reports which
+    one it actually found rather than assuming.
+    """
+    from backend.meeting_bridge.virtualcam import (
+        BridgeError, VirtualCamera, VirtualMicrophone, describe_bridge,
+    )
+    from backend.sign_to_speech.reasoning import reconstruct_sentence
+    from backend.sign_to_speech.tts_output import synthesize
+
+    status = describe_bridge()
+    video, audio = status.get("video", {}), status.get("audio", {})
+    check(
+        bool(video.get("available")) and bool(audio.get("available")),
+        "T1.16. both virtual devices are present",
+        f"video: {video.get('device', video.get('reason'))} "
+        f"(backend {video.get('backend', '-')}); audio: "
+        f"{audio.get('device', audio.get('reason'))}",
+    )
+    if not (video.get("available") and audio.get("available")):
+        return
+
+    # ---- audio: a real sentence, spoken into the virtual microphone --------
+    sentence = reconstruct_sentence("HELLO", 0.87)
+    utterance = synthesize(sentence.sentence)
+    microphone = VirtualMicrophone()
+    started = time.monotonic()
+    try:
+        played = microphone.play_wav(utterance.audio, blocking=True)
+        elapsed = time.monotonic() - started
+        audio_ok = played > 0 and elapsed >= played * 0.5
+        note = (f"{sentence.sentence!r} -> {played:.2f}s of audio into "
+                f"{microphone.device.name!r}, playback took {elapsed:.2f}s")
+    except BridgeError as exc:
+        audio_ok, note = False, str(exc)
+    check(audio_ok, "2. a real sentence is audible through the virtual microphone", note)
+
+    # ---- video: real rendered avatar frames into the virtual camera --------
+    frames: list = []
+    source = "generated test pattern"
+    if frames_dir and frames_dir.is_dir():
+        from PIL import Image
+
+        paths = sorted(frames_dir.glob("*.png"))
+        for path in paths[:120]:
+            frames.append(np.asarray(Image.open(path).convert("RGB"), dtype=np.uint8))
+        if frames:
+            source = f"{len(frames)} rendered avatar frames from {frames_dir.name}/"
+    if not frames:
+        # Still a real send, just not of the avatar — reported as such.
+        gradient = np.linspace(0, 255, 1280, dtype=np.uint8)
+        frames = [np.dstack([
+            np.tile(gradient, (720, 1)),
+            np.full((720, 1280), 80, np.uint8),
+            np.full((720, 1280), 160, np.uint8),
+        ])]
+
+    height, width = frames[0].shape[:2]
+    try:
+        with VirtualCamera(width=width, height=height, fps=30.0) as camera:
+            device = camera.device
+            for frame in frames:
+                camera.send(frame)
+        video_ok, note = True, f"sent {len(frames)} frame(s) of {source} to {device!r} at {width}x{height}"
+    except BridgeError as exc:
+        video_ok, note = False, str(exc)
+    check(video_ok, "T1.16. real frames reach the OBS virtual camera", note)
+
+
+def item_10_demo_scenes() -> None:
+    """Every demo scene runs end to end and reaches the decision it claims to."""
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "run_demo_scenes.py")],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    out = result.stdout
+    expectations = {
+        "SCENE 1": "action:  translate",
+        "SCENE 2": "[STALLS BOTH SIDES]",
+        "SCENE 3": "resolved at stage",
+        "SCENE 4": "-> refuse",
+        "SCENE 5": "released",
+    }
+    reached = {name: marker in out for name, marker in expectations.items()}
+    overrides = out.count("override: RUNNING")
+
+    check(
+        result.returncode == 0 and all(reached.values()) and overrides >= 5,
+        "10. all five demo scenes run and reach their stated outcome",
+        ", ".join(f"{name.lower()} {'ok' if ok else 'MISSED'}" for name, ok in reached.items())
+        + f"; override control shown in {overrides} traces",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--live", action="store_true",
                         help="also run the items that call Groq (costs API usage)")
+    parser.add_argument("--bridge", action="store_true",
+                        help="also write to the OBS virtual camera and virtual mic")
+    parser.add_argument("--frames", type=Path, default=None,
+                        help="directory of rendered avatar PNGs to send to the camera")
     args = parser.parse_args()
 
     print("\nStage 1 §E Final Acceptance\n")
@@ -398,10 +505,18 @@ def main() -> int:
     else:
         blocked("2/3. speech<->sign round trips through real LLM output",
                 "needs Groq; re-run with --live")
-    blocked("2. audible through the virtual microphone",
-            "needs OBS Virtual Camera + a virtual mic device running; cannot be scripted")
-    blocked("10. demo scenes 1-5 live, in sequence",
-            "needs the full stack running with OBS; a human has to watch it")
+    if args.bridge:
+        print()
+        item_2_audible(args.frames)
+    else:
+        blocked("2. audible through the virtual microphone",
+                "needs OBS Virtual Camera + a virtual mic device; re-run with --bridge")
+    if args.live:
+        item_10_demo_scenes()
+    else:
+        blocked("10. demo scenes 1-5", "scene 1 calls Groq; re-run with --live")
+    blocked("10. ...performed live in front of an audience",
+            "the scenes run and are asserted above; watching a live run is a human step")
 
     passed = sum(1 for s, _, _ in RESULTS if s == "PASS")
     failed = sum(1 for s, _, _ in RESULTS if s == "FAIL")

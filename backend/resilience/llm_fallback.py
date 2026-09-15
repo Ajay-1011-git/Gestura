@@ -11,14 +11,22 @@ behind it.
 rather than assumed: `ollama.chat(model, messages, *, think, options, format)`
 returns a `ChatResponse` whose text is at `response.message.content`.
 
-**The `think` parameter is this stage's version of a bug Stage 1 already
-paid for.** Stage 1 discovered live that Groq's `gpt-oss` models return empty
-content unless `reasoning_effort` is passed explicitly, because hidden
-reasoning consumes the whole completion budget. Qwen3 is likewise a reasoning
-model and does the same thing through a different parameter — so `think=False`
-is passed on every call here for exactly the reason `reasoning_effort` is
-passed on every Groq call. Neither is optional; both produce empty strings when
-omitted.
+**This stage's version of a bug Stage 1 already paid for, and the fix that
+actually worked.** Stage 1 discovered live that Groq's `gpt-oss` models return
+empty content unless `reasoning_effort` is passed, because hidden reasoning
+eats the completion budget. Qwen3 is also a reasoning model and fails the same
+way from the other direction: measured here, `think=False` did *not* stop it
+reasoning — it emitted 2,060 characters of "First, the user asked..." as
+visible content and hit the token ceiling mid-thought, so the gloss validator
+rejected it.
+
+Prompting harder is not the fix; a local 4B model will not reliably obey "output
+only gloss tokens" the way a hosted 20B does. Constraining the *output shape*
+is. Every call passes a one-field JSON schema through Ollama's `format`
+parameter, so the model must emit `{"answer": "..."}` and cannot preface it
+with its reasoning. The same prompt that produced 2,060 characters of rambling
+returns `HOSPITAL WHERE` in 0.46s under the schema — faster than the Groq call
+it stands in for. `think=False` is still passed, as belt and braces.
 
 **Drop-in shape.** :func:`complete` returns a plain `str`, which is what both
 Stage 1 reasoning modules do with `choice.message.content` before validating
@@ -29,6 +37,7 @@ trustworthy for being local.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -46,6 +55,15 @@ MAX_OUTPUT_CHARS = 2_000
 # output that changes between runs, and there is no creative latitude wanted in
 # either gloss generation or sentence reconstruction.
 OPTIONS = {"temperature": 0.0, "num_predict": 512}
+
+# One field, type string. This is what stops a reasoning model narrating its way
+# through the completion budget — see the module docstring.
+ANSWER_KEY = "answer"
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {ANSWER_KEY: {"type": "string"}},
+    "required": [ANSWER_KEY],
+}
 
 
 class LlmFallbackError(RuntimeError):
@@ -93,7 +111,8 @@ def complete_verbose(
         response = _client().chat(
             model=name,
             messages=messages,
-            think=False,  # see module docstring — without this, content is empty
+            think=False,
+            format=ANSWER_SCHEMA,  # see module docstring — this is what makes it usable
             options=OPTIONS,
         )
     except LlmFallbackError:
@@ -105,13 +124,26 @@ def complete_verbose(
         ) from exc
     latency = time.monotonic() - started
 
-    text = ((getattr(response, "message", None) and response.message.content) or "").strip()
-    if not text:
+    raw = ((getattr(response, "message", None) and response.message.content) or "").strip()
+    if not raw:
         raise LlmFallbackError(f"local model {name!r} returned empty content")
-    if len(text) > MAX_OUTPUT_CHARS:
+    if len(raw) > MAX_OUTPUT_CHARS:
         raise LlmFallbackError(
-            f"local model {name!r} returned {len(text)} chars — refusing a runaway completion"
+            f"local model {name!r} returned {len(raw)} chars — refusing a runaway completion"
         )
+
+    # Validated at the boundary: the schema is enforced by Ollama, but a
+    # malformed body would otherwise reach the Stage 1 validators looking like
+    # a real answer.
+    try:
+        text = str(json.loads(raw)[ANSWER_KEY]).strip()
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LlmFallbackError(
+            f"local model {name!r} did not honour the response schema: {raw[:200]!r}"
+        ) from exc
+    if not text:
+        raise LlmFallbackError(f"local model {name!r} returned an empty answer field")
+
     return Completion(text=text, model=f"ollama/{name}", latency_s=latency)
 
 

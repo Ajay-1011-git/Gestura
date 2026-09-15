@@ -270,8 +270,9 @@ def item_3_speech_to_sign_live() -> None:
     from backend.speech_to_sign.reasoning import to_gloss
 
     transcript = "Hello, please sit down."
-    result = to_gloss(transcript)
     lookup = GlossLookup(ROOT / "data" / "lexicon")
+    # Gloss spellings, not spoken wording — see GlossLookup.glosses.
+    result = to_gloss(transcript, vocabulary=lookup.glosses)
     coverage = lookup.coverage_for(list(result.tokens))
     renderable = [c.gloss for c in coverage if c.status is CoverageStatus.LEXICON_HIT]
 
@@ -297,6 +298,41 @@ def item_3_speech_to_sign_live() -> None:
         f"coverage " + ", ".join(f"{c.gloss}={c.status.value}" for c in coverage) +
         (f"; rendered {pose.body.data.shape[0]} frames over {len(timeline)} signs, "
          f"{report.gaps_filled} gaps filled" if pose is not None else "; nothing renderable"),
+    )
+
+
+def item_3b_gloss_quality_live() -> None:
+    """Gloss must be reproducible, spell multi-word signs correctly, and keep
+    terms it cannot render rather than substituting or dropping them."""
+    from backend.speech_to_sign.gloss_lookup import GlossLookup
+    from backend.speech_to_sign.reasoning import to_gloss
+
+    lookup = GlossLookup(ROOT / "data" / "lexicon")
+    glosses = lookup.glosses
+
+    # THANK-YOU is the sign that catches the words/glosses mix-up: the index's
+    # spoken wording is 'thank you', and glossing from that spelling returns two
+    # tokens, neither of which resolves.
+    multi = to_gloss("Thank you.", vocabulary=glosses)
+    multi_ok = "THANK-YOU" in multi.tokens and "THANK" not in multi.tokens
+
+    # A sentence with a term the lexicon has no sign for: it must come back
+    # named, not swapped for a listed sign that means something else.
+    honest = to_gloss("Do you need help?", vocabulary=glosses)
+    coverage = lookup.coverage_for(list(honest.tokens))
+    unrenderable = [c.gloss for c in coverage if c.status is not CoverageStatus.LEXICON_HIT]
+    kept_oov = bool(unrenderable)
+
+    repeat = to_gloss("Hello, please sit down.", vocabulary=glosses)
+    again = to_gloss("Hello, please sit down.", vocabulary=glosses)
+    stable = repeat.gloss == again.gloss
+
+    check(
+        multi_ok and kept_oov and stable,
+        "3b. gloss is reproducible, spells multi-word signs, and keeps what it cannot render",
+        f"'Thank you.' -> {multi.gloss!r}; 'Do you need help?' -> {honest.gloss!r} "
+        f"(unrenderable and reported: {unrenderable or 'none'}); "
+        f"repeated call {'matches' if stable else 'DIFFERS'}: {repeat.gloss!r}",
     )
 
 
@@ -501,6 +537,7 @@ def main() -> int:
     if args.live:
         print()
         item_3_speech_to_sign_live()
+        item_3b_gloss_quality_live()
         item_2_sign_to_speech_live()
     else:
         blocked("2/3. speech<->sign round trips through real LLM output",

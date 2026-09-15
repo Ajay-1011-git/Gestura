@@ -174,8 +174,29 @@ class GlossLookup:
 
     @property
     def vocabulary(self) -> list[str]:
+        """The spoken-language *words* the lexicon covers, e.g. ``thank you``."""
         words = self._lookup.words_index.get(SPOKEN_LANGUAGE, {}).get(SIGNED_LANGUAGE, {})
         return sorted(words)
+
+    @property
+    def glosses(self) -> list[str]:
+        """The *gloss* tokens the lexicon covers, e.g. ``THANK-YOU``.
+
+        Not the same list as :attr:`vocabulary`, and the difference matters to
+        anything generating gloss. That one returns the index's spoken words —
+        lowercase, and space-separated where a sign covers two words — so a
+        multi-word sign arrives as ``thank you``. Handed to a model as the set of
+        available signs, it teaches exactly the wrong lesson and comes back as
+        two tokens, ``THANK YOU``, neither of which resolves. `coverage_for`
+        already normalises across the two spellings on the way back in; this is
+        the same correspondence, exposed for the way out.
+        """
+        with (self.lexicon_dir / "index.csv").open() as handle:
+            return sorted({
+                row["glosses"].strip().upper()
+                for row in csv.DictReader(handle)
+                if row.get("glosses", "").strip()
+            })
 
     def coverage_for(self, tokens: list[str]) -> tuple[TokenCoverage, ...]:
         """Per-token coverage without building the pose (FR-8)."""

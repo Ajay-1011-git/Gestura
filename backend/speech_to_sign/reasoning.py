@@ -42,12 +42,35 @@ Gloss is the written notation for signs, not English. Rules:
 - Drop articles (a, an, the) and forms of "to be" (is, am, are, was, were).
 - Drop inflection: signs are uninflected. WALKED becomes WALK.
 - Word order is broadly Subject-Object-Verb, not Subject-Verb-Object.
-- Put time markers FIRST: "I am going today" becomes TODAY ME GO.
+- Put time markers FIRST: "You are going today" becomes TODAY YOU GO.
 - Put question words LAST: "Where is the hospital" becomes HOSPITAL WHERE.
-- Negation follows the verb: "I don't understand" becomes ME UNDERSTAND NOT.
+- Negation follows the verb: "He is not going" becomes HE GO NOT.
 - Use a hyphen only inside a single multi-word sign, e.g. THANK-YOU.
+- Gloss ONLY what the sentence says. Do not add a subject the sentence does not
+have: "Please sit down" has no subject, so it is PLEASE SIT, not PLEASE ME SIT.
+- Do not drop content either. Every meaningful word in the sentence must appear.
 - Never invent a sign for a proper noun. Keep names and places as-is in \
 capitals so they can be fingerspelled downstream."""
+
+# Appended when the caller knows which signs are actually available.
+#
+# This is preference, deliberately not a constraint. Restricting the model to the
+# curated list would make it reach for the nearest available sign whenever a
+# concept has none — substituting SIT for "lie down", or dropping the term
+# entirely — which is precisely the fabrication FR-12 exists to prevent. A term
+# with no validated sign has to survive this step intact so that T1.9's coverage
+# report can mark it UNMATCHED and the waterfall can refuse it. What the list
+# does fix is the model reaching for a *different* sign than the one the lexicon
+# holds for the same idea.
+VOCABULARY_PROMPT = """
+Signs available in this deployment's lexicon:
+{vocabulary}
+
+Prefer these exact tokens when one of them genuinely expresses part of the
+sentence. If part of the sentence has no sign in that list, still emit the
+natural gloss token for it — do NOT substitute a listed sign that means
+something else, and do NOT silently omit it. Something downstream reports
+unavailable terms; guessing hides them."""
 
 
 class GlossError(RuntimeError):
@@ -89,23 +112,46 @@ def to_gloss(
     transcript: str,
     *,
     model: str = FAST_MODEL,
+    vocabulary: Sequence[str] | None = None,
 ) -> GlossResult:
-    """Convert one English transcript into ISL gloss notation."""
+    """Convert one English transcript into ISL gloss notation.
+
+    ``vocabulary`` is the caller's list of signs that actually have a validated
+    pose — pass ``GlossLookup.glosses``, which is the gloss spelling
+    (``THANK-YOU``); ``GlossLookup.vocabulary`` is the spoken wording
+    (``thank you``) and glossing from it produces two tokens that resolve to
+    nothing. It is guidance, not a filter: see
+    ``VOCABULARY_PROMPT``. Left out, the model glosses from general knowledge and
+    is measurably worse at it, inventing tokens the deployment cannot render and
+    dropping ones it can.
+    """
     transcript = transcript.strip()
     if not transcript:
         raise GlossError("empty transcript supplied")
+
+    prompt = SYSTEM_PROMPT
+    if vocabulary:
+        # Comma-separated: a space-separated list cannot distinguish one
+        # two-word sign from two one-word signs.
+        prompt += VOCABULARY_PROMPT.format(
+            vocabulary=", ".join(sorted({v.strip().upper() for v in vocabulary}))
+        )
 
     started = time.monotonic()
     try:
         response = get_client().chat.completions.create(
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": transcript},
             ],
             model=model,
             reasoning_effort=REASONING_EFFORT,
             max_completion_tokens=MAX_COMPLETION_TOKENS,
-            temperature=0.2,
+            # Deterministic. The same transcript returned 'HELLO ME SIT DOWN' and
+            # 'SIT DOWN' on consecutive calls at 0.2 — a demo cannot rehearse
+            # against output that changes between runs, and there is no creative
+            # latitude wanted here anyway.
+            temperature=0.0,
         )
     except RateLimitError as exc:
         raise GlossError(

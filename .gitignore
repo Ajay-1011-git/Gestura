@@ -33,3 +33,7 @@ data/out/
 *.mp3
 logs/
 data/lexicon_src/
+
+# Fingerspelling source video — large and re-downloadable via
+# scripts/build_fingerspelling.py. The extracted .pose files ARE committed.
+data/fingerspelling/.source_video/

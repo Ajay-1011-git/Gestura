@@ -1,0 +1,30 @@
+# Setu — Python dependencies (Stage 1 + Stage 2).
+#
+# Python 3.12 is required, not optional: pose-format needs the legacy
+# mediapipe.python.solutions API (mediapipe<0.10.30), and legacy MediaPipe
+# ships no Python 3.13 wheels. See backend/recognition/extract.py.
+#
+#   uv venv --python 3.12
+#   uv pip install -r requirements.txt
+
+# --- Core pipeline (Stage 1) -------------------------------------------------
+groq==1.7.0                      # LLM reasoning, STT and TTS — the one cloud dependency
+pose-format==0.14.1              # .pose storage and MediaPipe extraction
+mediapipe==0.10.21               # pinned: <0.10.30 for the legacy solutions API
+numpy==1.26.4
+scipy==1.17.1
+torch==2.14.0                    # the learned recogniser (backend/recognition/neural.py)
+python-dotenv==1.2.3
+opencv-contrib-python==4.11.0.86
+sounddevice==0.5.6               # microphone capture (backend/speech_to_sign/stt_input.py)
+pyvirtualcam==0.15.0             # OBS virtual camera bridge (backend/meeting_bridge/)
+
+# Lexicon lookup and coverage reporting. Installed from git — the PyPI release
+# predates the --coverage-info categories backend/contracts.py mirrors.
+spoken-to-signed @ git+https://github.com/sign-language-processing/spoken-to-signed-translation.git@6ba0f5469ea62ef925e92a92e7b747ce2da5a5d1
+
+# --- Local fallback stack (Stage 2, T2.4) ------------------------------------
+# Only exercised while safe mode is active. Both are free and run locally;
+# Ollama itself is a separate native install (https://ollama.com), this is
+# just the client.
+ollama==0.6.2

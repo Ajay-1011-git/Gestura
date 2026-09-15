@@ -44,6 +44,11 @@ FINGERSPELLING_DIR = ROOT / "data" / "fingerspelling"
 
 ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
+# Curated list of ordinary English words with established ISL signs. A miss on
+# one of these is a gap in the 16-sign render lexicon (R-10), not a word that
+# wants spelling — see the file's own header for the full argument.
+DO_NOT_SPELL = FINGERSPELLING_DIR / "do-not-spell.md"
+
 # Held between letters so a spelled word reads as discrete letters rather than
 # one continuous smear. Matches the inter-sign pause `build_avatar_sequence`
 # already uses between lexicon entries.
@@ -95,6 +100,41 @@ def available_letters(directory: Path = FINGERSPELLING_DIR) -> frozenset[str]:
     return frozenset(
         path.stem.lower() for path in directory.glob("*.pose")
         if len(path.stem) == 1 and path.stem.lower() in ALPHABET
+    )
+
+
+@lru_cache(maxsize=1)
+def unspellable_words(path: Path = DO_NOT_SPELL) -> frozenset[str]:
+    """Words that must surface as UNMATCHED rather than be spelled out."""
+    if not path.is_file():
+        return frozenset()
+    words: set[str] = set()
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            continue
+        cell = stripped.strip("|").strip()
+        if not cell or set(cell) <= set("-: ") or cell.lower() == "word":
+            continue
+        words.add(cell.lower())
+    return frozenset(words)
+
+
+def should_spell(term: str, path: Path = DO_NOT_SPELL) -> bool:
+    """Does this term warrant fingerspelling, as opposed to an honest refusal?
+
+    Fingerspelling is for proper nouns, acronyms and terms with genuinely no
+    sign. Spelling an ordinary word because *this deployment* happens to lack
+    its pose would present a lexicon gap as a successful translation — and
+    fifteen handshapes for "I need" is not a translation a Deaf viewer can read.
+    """
+    cleaned = term.strip().lower().replace("-", " ")
+    if not cleaned:
+        return False
+    stop = unspellable_words(path)
+    # A multi-word gloss is spellable only if some part of it warrants it.
+    return any(
+        word not in stop for word in cleaned.split() if any(c in ALPHABET for c in word)
     )
 
 

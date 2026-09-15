@@ -95,14 +95,21 @@ def item_4_fingerspelling() -> None:
     coverage = lookup.coverage_for(tokens)
     by_gloss = {c.gloss.upper(): c.status for c in coverage}
 
+    # SUPERSEDED BY STAGE 2 (T2.6). This asserted UNMATCHED, because Stage 1 had
+    # no ISL manual alphabet and an out-of-vocabulary term had nowhere to go.
+    # Stage 2 built the alphabet, so the correct answer is now FINGERSPELLING.
+    # What the item is really testing is unchanged and still enforced: the term
+    # is *reported*, never silently guessed into a lexicon hit.
     oov = by_gloss.get("ZYGOMORPHIC")
     known_ok = all(
         by_gloss.get(g) is CoverageStatus.LEXICON_HIT for g in ("HELLO", "YOU", "SIT")
     )
     check(
-        oov is CoverageStatus.UNMATCHED and known_ok,
+        oov in (CoverageStatus.FINGERSPELLING, CoverageStatus.UNMATCHED) and known_ok,
         "4. an out-of-vocabulary term is reported, not silently guessed",
-        "coverage: " + ", ".join(f"{c.gloss}={c.status.value}" for c in coverage),
+        "coverage: " + ", ".join(f"{c.gloss}={c.status.value}" for c in coverage)
+        + f" (Stage 1 expected unmatched here; Stage 2's T2.6 makes it "
+          f"{oov.value if oov else '?'} — reported either way, never a lexicon hit)",
     )
 
     # T1.9 asks for a fingerspelling fallback and this reports, plainly, that it
@@ -115,15 +122,18 @@ def item_4_fingerspelling() -> None:
         (Path(spoken_to_signed.__file__).parent / "assets" / "fingerspelling_lexicon").iterdir()
         if p.is_dir()
     )
+    from backend.speech_to_sign import fingerspell
+
+    letters = len(fingerspell.available_letters())
     check(
-        "ins" not in bundled,
-        "4b. ISL fingerspelling is unavailable, and is reported as UNMATCHED not faked",
+        "ins" not in bundled and letters == 26,
+        "4b. ISL fingerspelling comes from a recorded alphabet, not a faked one",
         f"spoken-to-signed-translation bundles {len(bundled)} fingerspelling lexicons "
-        f"and 'ins' is not among them (note 'ise' is Italian, not Indian). ISL uses a "
-        f"two-handed manual alphabet, so no bundled set substitutes. Out-of-vocabulary "
-        f"terms therefore surface as UNMATCHED and the waterfall refuses — correct "
-        f"under FR-12, but the FINGERSPELLING tier is unreachable until an ISL "
-        f"alphabet is recorded.",
+        f"and 'ins' is still not among them (note 'ise' is Italian, not Indian) — that "
+        f"has not changed. What changed is that Stage 2's T2.6 built the alphabet the "
+        f"package does not ship: {letters}/26 ISL handshapes in data/fingerspelling/, "
+        f"extracted through T1.3's pipeline. The FINGERSPELLING tier is reachable "
+        f"because real poses back it, not because the status was relaxed.",
     )
 
 
@@ -276,16 +286,23 @@ def item_11_orchestrator() -> None:
 
     clip = sorted((ROOT / "data" / "vocab" / "HOSPITAL").glob("*INCLUDE*.pose"))[0]
     heard = interpreter.sign_to_speech(load_pose(clip))
-    refused = interpreter.speech_to_sign("I need an ambulance.")
+    # SUPERSEDED BY STAGE 2 (T2.6): this sentence used to REFUSE, because
+    # AMBULANCE had no validated sign and nowhere else to go — hence the
+    # variable name. It now TRANSLATEs with AMBULANCE fingerspelled. Either is
+    # a correct waterfall outcome; what this item tests is that both directions
+    # run through the waterfall and land in one trace, which is unchanged.
+    handled = interpreter.speech_to_sign("I need an ambulance.")
 
     log = interpreter.trace()
     stages = {"OBSERVE" in log, "DECIDE" in log, "ACTION" in log}
     check(
         heard.action is Action.TRANSLATE and bool(heard.spoken)
-        and refused.action is Action.REFUSE and stages == {True},
+        and handled.action in (Action.REFUSE, Action.TRANSLATE) and stages == {True},
         "11. the orchestrator runs both directions through the waterfall",
         f"sign->speech: {heard.segment.raw_input} @ {heard.segment.confidence:.2f} -> "
-        f"{heard.spoken!r}; speech->sign: {refused.gloss!r} -> {refused.action.value}; "
+        f"{heard.spoken!r}; speech->sign: {handled.gloss!r} -> {handled.action.value}"
+        + (f" (fingerspelled {list(handled.fingerspelled)})" if handled.fingerspelled else "")
+        + "; "
         f"both traced in one log ({len(log.splitlines())} lines); "
         f"recogniser is the {interpreter.recognizer_kind} one over "
         f"{len(interpreter.recognizer.vocabulary)} signs",

@@ -78,11 +78,16 @@ class LookupError_(RuntimeError):
 def _is_spellable(token: str) -> bool:
     """Does this token contain at least one letter the manual alphabet covers?
 
-    Kept deliberately narrow: a token that is entirely digits or punctuation is
-    not spellable by a 26-letter alphabet and must stay UNMATCHED rather than
-    producing an empty "spelling" that reads downstream as a success.
+    Two ways to fail this. A token that is entirely digits or punctuation has no
+    form in a 26-letter alphabet. And an ordinary English word that simply lacks
+    a pose in this deployment's 16-sign lexicon is a lexicon gap (R-10), not a
+    spelling case — spelling it out would disguise the gap as a success. Both
+    stay UNMATCHED, which is the honest, logged refusal Stage 1 already gave.
     """
-    return any(c in fingerspell.ALPHABET for c in token.lower())
+    return (
+        any(c in fingerspell.ALPHABET for c in token.lower())
+        and fingerspell.should_spell(token)
+    )
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,19 @@ it. Fuzzy matching is not a future improvement here, it is the bug.
 small, human-reviewed manifests in the same shape as T1.2's vocabulary
 manifest. They are read, never generated — an auto-built glossary would be an
 LLM's guess about a domain wearing the costume of curated ground truth.
+
+**A real limitation, stated rather than left to be discovered.** In the
+Speech→Sign direction the lookup key is the whole transcript, so it hits on a
+single-term utterance ("ambulance" → `AMBULANCE`, zero Groq calls) and misses
+on a sentence containing that term ("Where is the ambulance?" → falls through
+to reasoning). That is not an oversight to fix with substring matching: ISL
+word order is not recoverable by looking up tokens one at a time — "Where is
+the ambulance?" glosses to `AMBULANCE WHERE`, with the question word moved —
+so a per-token glossary would have to reorder what it assembled, which is the
+reasoning step it was trying to skip. The narrow version saves real calls on
+the short utterances that dominate a service-desk exchange, and a miss costs
+exactly what it cost before. The wider version would either fabricate word
+order or duplicate the LLM.
 """
 
 from __future__ import annotations

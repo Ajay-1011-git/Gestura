@@ -18,9 +18,11 @@ machine was chosen and langgraph removed rather than left as an unused
 dependency. The requirement that actually matters, FR-15's Observe/Decide/Action
 trace, is produced either way and is emitted here directly.
 
-Stage 2 and Stage 3 steps are present as explicit no-op passthroughs so the
-ladder's shape is visible and later stages slot in without restructuring.
-Building them now would be scope drift.
+Stage 2 filled in the two glossary rungs (T2.1, T2.2); they resolve for real
+when a session supplies them and stay no-op passthroughs when it does not, so
+Stage 1's harnesses keep working against a bare waterfall. The Stage 3 rungs
+remain explicit no-op passthroughs so the ladder's shape is visible and that
+stage slots in without restructuring. Building them now would be scope drift.
 """
 
 from __future__ import annotations
@@ -31,7 +33,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Sequence
 
+from typing import TYPE_CHECKING
+
 from backend.contracts import CoverageStatus, DecisionLogEntry, Direction, Segment
+
+if TYPE_CHECKING:  # import-cycle-free type names for the two Stage 2 rungs
+    from backend.waterfall.domain_glossary import DomainGlossary
+    from backend.waterfall.session_glossary import SessionGlossary
 
 
 class Action(Enum):
@@ -105,10 +113,17 @@ class EscalationWaterfall:
         cooldown_segments: int = COOLDOWN_SEGMENTS,
         on_log: Callable[[DecisionLogEntry], None] | None = None,
         clock: Callable[[], float] = time.time,
+        session_glossary: "SessionGlossary | None" = None,
+        domain_glossary: "DomainGlossary | None" = None,
     ) -> None:
         self.confident_threshold = confident_threshold
         self.low_confidence_trigger = low_confidence_trigger
         self.cooldown_segments = cooldown_segments
+        # Stage 2 (T2.1, T2.2). Both optional: left unset, the two rungs below
+        # stay the no-op passthroughs Stage 1 shipped, so every Stage 1 test
+        # harness that builds a bare waterfall keeps working unchanged.
+        self.session_glossary = session_glossary
+        self.domain_glossary = domain_glossary
         self.state = WaterfallState()
         self.log: list[DecisionLogEntry] = []
         self._on_log = on_log
@@ -127,10 +142,22 @@ class EscalationWaterfall:
     # ---- Stage 2 / Stage 3 hooks ---------------------------------------------
 
     def _session_glossary(self, segment: Segment) -> str | None:
-        return None  # TODO: Stage 2 — in-memory, call-scoped glossary
+        """Stage 2 (T2.1): a term resolved earlier in this call answers for free."""
+        if self.session_glossary is None:
+            return None
+        hit = self.session_glossary.resolve(segment.raw_input)
+        return hit.resolution if hit is not None else None
 
     def _domain_glossary(self, segment: Segment) -> str | None:
-        return None  # TODO: Stage 2 — room-context-selected domain glossary
+        """Stage 2 (T2.2): the room's curated vocabulary, checked before the LLM.
+
+        A miss returns None and the ladder continues unchanged — never a
+        near-match from the selected domain (FR-20).
+        """
+        if self.domain_glossary is None:
+            return None
+        hit = self.domain_glossary.resolve(segment.raw_input)
+        return hit.resolution if hit is not None else None
 
     def _agent_reprocessing(self, segment: Segment) -> Segment | None:
         return None  # TODO: Stage 3 — re-query recognition on the buffered window
@@ -221,7 +248,11 @@ class EscalationWaterfall:
             if resolver(segment) is not None:
                 self._emit("ACTION", sid, f"resolved at {step.value}")
                 return Decision(action=Action.TRANSLATE, segment=segment, stage_reached=step, reason=step.value)
-            self._emit("DECIDE", sid, f"{step.value}: miss (Stage 2 hook, inert)")
+            wired = (self.session_glossary if step is Stage.SESSION_GLOSSARY
+                     else self.domain_glossary) is not None
+            self._emit("DECIDE", sid,
+                       f"{step.value}: miss" if wired
+                       else f"{step.value}: not configured for this session")
 
         stage = Stage.AGENT_REPROCESSING
         if self._agent_reprocessing(segment) is not None:

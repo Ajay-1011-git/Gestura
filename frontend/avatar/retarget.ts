@@ -107,29 +107,151 @@ function fingerChain(side: "left" | "right"): Array<[HumanoidBone, number, numbe
   ];
 }
 
+/**
+ * Orthonormal basis, columns `[side, forward, normal]`.
+ *
+ * Fingers are solved in the palm's frame rather than world space. Aiming a
+ * finger segment at a world direction ignores which way the palm faces, so the
+ * same handshape renders differently depending on wrist orientation — the
+ * "fingers bending weirdly" symptom. Expressing each segment relative to the
+ * signer's palm and rebuilding it relative to the avatar's palm makes a
+ * handshape mean the same thing in both.
+ */
+function basis(forward: THREE.Vector3, side: THREE.Vector3): THREE.Matrix4 {
+  const f = forward.clone().normalize();
+  const n = new THREE.Vector3().crossVectors(f, side).normalize();
+  const s = new THREE.Vector3().crossVectors(n, f).normalize();
+  return new THREE.Matrix4().makeBasis(s, f, n);
+}
+
 export interface RetargetOptions {
-  /** Slerp factor per frame. Lower damps jitter but lags fast motion. */
-  smoothing?: number;
   /** How much the (small-magnitude) z channel is trusted, relative to x/y. */
   depthScale?: number;
-  /** Metres of forward offset applied to the whole upper body, so signing
-   *  happens in front of the chest rather than intersecting it. */
+  /** Forward offset applied to wrist targets, as a fraction of shoulder span,
+   *  so signing happens in front of the chest rather than intersecting it. */
   forwardBias?: number;
 }
 
 export class PoseRetargeter {
   private readonly avatar: LoadedAvatar;
-  private readonly smoothing: number;
   private readonly depthScale: number;
   private readonly forwardBias: number;
   readonly driven = new Set<HumanoidBone>();
   lastHandsSolved = 0;
+  /** Wrist target error in avatar units, for verification. */
+  lastReachError = 0;
+
+  /** Avatar rest measurements, captured once at rest. */
+  private rig: {
+    shoulderSpan: number;
+    arm: Record<"left" | "right", { upper: number; lower: number }>;
+    palmLocal: Record<"left" | "right", THREE.Matrix4>;
+  } | null = null;
 
   constructor(avatar: LoadedAvatar, options: RetargetOptions = {}) {
     this.avatar = avatar;
-    this.smoothing = options.smoothing ?? 0.4;
-    this.depthScale = options.depthScale ?? 1.0;
-    this.forwardBias = options.forwardBias ?? 0.35;
+    // Calibrated, not guessed: at 1.0 the z axis spans 3937px against a 384px
+    // shoulder span - 10.25x - so depth swamped x/y and pushed every IK target
+    // outside the arm's reach. A sweep found wrist IK exact (error 0) at 0.25
+    // and below; 0.06 keeps depth span near 0.6x shoulder width, which is a
+    // plausible amount of forward motion for signing.
+    this.depthScale = options.depthScale ?? 0.06;
+    this.forwardBias = options.forwardBias ?? 0.12;
+  }
+
+  private worldPos(name: HumanoidBone): THREE.Vector3 {
+    return this.avatar.bones.get(name)!.getWorldPosition(new THREE.Vector3());
+  }
+
+  /** Measure bone lengths and palm bases from the untouched rest pose. */
+  private measureRig(): NonNullable<PoseRetargeter["rig"]> {
+    if (this.rig) return this.rig;
+    this.reset();
+    this.avatar.gltfScene.updateMatrixWorld(true);
+
+    const arm = {} as Record<"left" | "right", { upper: number; lower: number }>;
+    const palmLocal = {} as Record<"left" | "right", THREE.Matrix4>;
+
+    for (const side of ["left", "right"] as const) {
+      const shoulder = this.worldPos(`${side}UpperArm` as HumanoidBone);
+      const elbow = this.worldPos(`${side}LowerArm` as HumanoidBone);
+      const wrist = this.worldPos(`${side}Hand` as HumanoidBone);
+      arm[side] = { upper: shoulder.distanceTo(elbow), lower: elbow.distanceTo(wrist) };
+
+      const middle = this.worldPos(`${side}MiddleProximal` as HumanoidBone);
+      const index = this.worldPos(`${side}IndexProximal` as HumanoidBone);
+      const little = this.worldPos(`${side}LittleProximal` as HumanoidBone);
+      const world = basis(middle.clone().sub(wrist), index.clone().sub(little));
+      const handQuat = this.avatar.bones
+        .get(`${side}Hand` as HumanoidBone)!
+        .getWorldQuaternion(new THREE.Quaternion());
+      palmLocal[side] = new THREE.Matrix4()
+        .makeRotationFromQuaternion(handQuat.invert())
+        .multiply(world);
+    }
+
+    this.rig = {
+      shoulderSpan: this.worldPos("leftUpperArm").distanceTo(this.worldPos("rightUpperArm")),
+      arm,
+      palmLocal,
+    };
+    return this.rig;
+  }
+
+  /**
+   * Two-bone IK: rotate the arm so the wrist lands **on** the target.
+   *
+   * Directional aiming only matched bone directions, so the wrist ended up
+   * wherever the avatar's own bone lengths put it — measured error up to 0.4994
+   * against a total arm length of 0.3957, and hands that should be 0.887 apart
+   * rendered 0.519 apart. Two hands can never meet under direction matching;
+   * they can only meet if the wrist position itself is solved for.
+   *
+   * The elbow is placed by the law of cosines, with the real landmark elbow used
+   * as the pole hint so the arm bends the way the signer's did.
+   */
+  private solveArm(
+    side: "left" | "right",
+    target: THREE.Vector3,
+    poleHint: THREE.Vector3,
+  ): number {
+    const rig = this.measureRig();
+    const { upper, lower } = rig.arm[side];
+    const upperBone = `${side}UpperArm` as HumanoidBone;
+    const lowerBone = `${side}LowerArm` as HumanoidBone;
+
+    const shoulder = this.worldPos(upperBone);
+    const toTarget = target.clone().sub(shoulder);
+    const reach = upper + lower;
+    // Clamp just inside full extension: an exactly-straight arm has no defined
+    // elbow circle and the joint snaps.
+    const distance = THREE.MathUtils.clamp(
+      toTarget.length(),
+      Math.abs(upper - lower) + 1e-4,
+      reach - 1e-4,
+    );
+    const axis = toTarget.clone().normalize();
+
+    const along = (distance * distance + upper * upper - lower * lower) / (2 * distance);
+    const radius = Math.sqrt(Math.max(0, upper * upper - along * along));
+    const centre = shoulder.clone().addScaledVector(axis, along);
+
+    // Pole: the landmark elbow, projected perpendicular to the shoulder->target
+    // axis. Falls back to "forward and down" if the hint is degenerate.
+    let pole = poleHint.clone().sub(shoulder);
+    pole.addScaledVector(axis, -pole.dot(axis));
+    if (pole.lengthSq() < 1e-8) {
+      pole = new THREE.Vector3(0, -1, 0.5);
+      pole.addScaledVector(axis, -pole.dot(axis));
+    }
+    pole.normalize();
+
+    const elbow = centre.clone().addScaledVector(pole, radius);
+
+    this.aim(upperBone, elbow.clone().sub(shoulder));
+    this.aim(lowerBone, target.clone().sub(this.worldPos(lowerBone)));
+
+    return this.worldPos(`${side}Hand` as HumanoidBone).distanceTo(target);
   }
 
   /**
@@ -195,31 +317,53 @@ export class PoseRetargeter {
   applyFrame(sequence: PoseSequence, index: number): number {
     const frame = sequence.frames[index];
     if (!frame) return 0;
-    let written = 0;
+    const rig = this.measureRig();
+    this.reset();
+    this.avatar.gltfScene.updateMatrixWorld(true);
 
+    let written = 0;
     const poseNames = sequence.componentPoints["POSE_LANDMARKS"] ?? [];
     const posePoints = frame["POSE_LANDMARKS"] ?? [];
     const body: Record<string, PosePoint> = {};
     poseNames.forEach((n, i) => { if (posePoints[i]) body[n] = posePoints[i]; });
 
-    const tracked = (p?: PosePoint) => p && (p.C ?? 0) > 0;
-    const vec = (a: string, b: string) =>
-      this.toWorld(body[b], sequence).sub(this.toWorld(body[a], sequence));
+    const tracked = (p?: PosePoint) => !!p && (p.C ?? 0) > 0;
+    if (!tracked(body["LEFT_SHOULDER"]) || !tracked(body["RIGHT_SHOULDER"])) return 0;
 
-    // Arms, parent before child so each aim reads an up-to-date world matrix.
-    const arms: Array<[HumanoidBone, string, string, number]> = [
-      ["leftUpperArm", "LEFT_SHOULDER", "LEFT_ELBOW", this.forwardBias],
-      ["leftLowerArm", "LEFT_ELBOW", "LEFT_WRIST", 0],
-      ["rightUpperArm", "RIGHT_SHOULDER", "RIGHT_ELBOW", this.forwardBias],
-      ["rightLowerArm", "RIGHT_ELBOW", "RIGHT_WRIST", 0],
-    ];
-    for (const [bone, from, to, bias] of arms) {
-      if (!tracked(body[from]) || !tracked(body[to])) continue;
-      this.avatar.gltfScene.updateMatrixWorld(true);
-      if (this.aim(bone, vec(from, to), bias)) written += 1;
+    // Map landmark space into avatar space by matching shoulder spans, so the
+    // signer's proportions transfer regardless of frame size or camera distance.
+    const lmLeft = this.toWorld(body["LEFT_SHOULDER"], sequence);
+    const lmRight = this.toWorld(body["RIGHT_SHOULDER"], sequence);
+    const lmSpan = lmLeft.distanceTo(lmRight);
+    if (lmSpan < 1e-6) return 0;
+    const scale = rig.shoulderSpan / lmSpan;
+    const lmOrigin = lmLeft.clone().add(lmRight).multiplyScalar(0.5);
+    const avOrigin = this.worldPos("leftUpperArm")
+      .add(this.worldPos("rightUpperArm"))
+      .multiplyScalar(0.5);
+    const forward = rig.shoulderSpan * this.forwardBias;
+
+    const toAvatar = (p: PosePoint) =>
+      this.toWorld(p, sequence)
+        .sub(lmOrigin)
+        .multiplyScalar(scale)
+        .add(avOrigin)
+        .add(new THREE.Vector3(0, 0, forward));
+
+    this.lastReachError = 0;
+    for (const side of ["left", "right"] as const) {
+      const S = side.toUpperCase();
+      const elbow = body[`${S}_ELBOW`];
+      const wrist = body[`${S}_WRIST`];
+      if (!tracked(elbow) || !tracked(wrist)) continue;
+      this.lastReachError = Math.max(
+        this.lastReachError,
+        this.solveArm(side, toAvatar(wrist), toAvatar(elbow)),
+      );
+      written += 2;
     }
 
-    // Hands: wrist orientation first, then every finger segment.
+    // Hands: wrist orientation, then every finger segment in the palm's frame.
     this.lastHandsSolved = 0;
     for (const [component, side] of [
       ["LEFT_HAND_LANDMARKS", "left"],
@@ -231,14 +375,29 @@ export class PoseRetargeter {
       this.lastHandsSolved += 1;
 
       const at = (i: number) => this.toWorld(points[i], sequence);
+      const handBone = `${side}Hand` as HumanoidBone;
 
       this.avatar.gltfScene.updateMatrixWorld(true);
-      if (this.aim(`${side}Hand` as HumanoidBone, at(H.MIDDLE_MCP).sub(at(H.WRIST)))) written += 1;
+      if (this.aim(handBone, at(H.MIDDLE_MCP).clone().sub(at(H.WRIST)))) written += 1;
+      this.avatar.gltfScene.updateMatrixWorld(true);
+
+      // Signer's palm frame this frame, and the avatar's palm frame as posed.
+      const source = basis(
+        at(H.MIDDLE_MCP).clone().sub(at(H.WRIST)),
+        at(H.INDEX_MCP).clone().sub(at(H.PINKY_MCP)),
+      );
+      const target = new THREE.Matrix4()
+        .makeRotationFromQuaternion(
+          this.avatar.bones.get(handBone)!.getWorldQuaternion(new THREE.Quaternion()),
+        )
+        .multiply(rig.palmLocal[side]);
+      const sourceInverse = source.clone().transpose();   // orthonormal: transpose == inverse
 
       for (const [bone, from, to] of fingerChain(side)) {
         if ((points[from]?.C ?? 0) === 0 || (points[to]?.C ?? 0) === 0) continue;
+        const inPalm = at(to).clone().sub(at(from)).applyMatrix4(sourceInverse);
         this.avatar.gltfScene.updateMatrixWorld(true);
-        if (this.aim(bone, at(to).sub(at(from)))) written += 1;
+        if (this.aim(bone, inPalm.applyMatrix4(target))) written += 1;
       }
     }
 

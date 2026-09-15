@@ -1,10 +1,34 @@
 # Gestura — Curated ISL Vocabulary Manifest (Stage 1)
 
-> **STATUS: DRAFT — PENDING PROJECT OWNER REVIEW.**
-> T1.2 gates T1.3, T1.4, and T1.9. Do not begin pose extraction against this
-> list until the owner has cut, edited, and approved it. Architecture v3 §11.1
-> calls fixing this list "the single highest-leverage protective decision for
-> the whole project."
+> **STATUS: SCOPED TO AVAILABLE TRAINING DATA — approved 2026-09-15.**
+> T1.2 gates T1.3, T1.4, and T1.9. Architecture v3 §11.1 calls fixing this list
+> "the single highest-leverage protective decision for the whole project."
+>
+> **REVISION 2026-09-15:** the original 30-entry hospital list was scoped down
+> to the 16 entries below, chosen so that **every class has real training data
+> already available** and no signs need to be recorded before the pipeline can
+> run end to end. The 14 deferred entries are listed in "Phase 2 vocabulary"
+> near the bottom — deferring them costs nothing structurally, because adding a
+> class is a cheap retrain of the same small classifier head (see T1.4).
+
+## Data source for this vocabulary
+
+All 16 classes are covered by
+[`vidit031/isl-isolated-40words`](https://huggingface.co/datasets/vidit031/isl-isolated-40words)
+— 642 MP4 clips over 40 ISL glosses, **ungated**, last updated 2026-07-25,
+aggregated from ISL500 (405 clips), INCLUDE (143), CISLR (81) and the ISLRTC
+dictionary (13). It is a **derived aggregate under mixed upstream licenses**
+(the card is explicit that it is *not* dual-licensed as one open license) —
+respect each upstream license if any subset is redistributed, and cite the
+originals. For a supervised pilot this is a usable research corpus, not a
+cleared-for-production dataset; that distinction belongs in any public
+description of the system, consistent with G-4.
+
+**Selection rule: minimum 16 clips per class.** Four entries from the original
+manifest were dropped purely because the corpus does not have enough data for
+them — `when` (2 clips), `me` (3), `come` (4), `sorry` (6). Training and
+holding out a test set on 2–6 examples would produce a confidence number that
+is not calibrated, which FR-2 forbids. They move to Phase 2.
 
 ## What this file is
 
@@ -27,98 +51,147 @@ overclaim R-7 warns against.
 
 ## Scope shape
 
-Chosen for one narrow context — **a hospital reception desk** — matching the
-PRD's driving scenario. 30 entries: small enough to rehearse and re-record in
-an afternoon, broad enough to form real sentences in both directions.
+One narrow context — **a hospital reception desk**, matching the PRD's driving
+scenario — narrowed further to what the corpus can actually support. 16 active
+entries, 326 clips, minimum 16 clips per class.
 
 ---
 
-## Vocabulary
+## Active vocabulary (Stage 1)
+
+`clips` is the real count in `vidit031/isl-isolated-40words`, read from its
+`metadata.csv` on 2026-09-15.
 
 | gloss_id | English meaning | notes |
 |---|---|---|
-| HELLO | hello / greetings | Opens demo scene 1. Single clear movement, should be one of the most reliably recognized entries. |
-| THANK-YOU | thank you | Natural demo closer. Verify articulation against an ISL reference. |
-| PLEASE | please | Politeness marker; may be optional in ISL grammar — confirm whether it is normally signed or omitted before relying on it. |
-| SORRY | sorry / excuse me | Useful opener for an unscheduled walk-up interaction. |
-| YES | yes | Short sign. Short signs give the DTW classifier less signal — expect lower confidence and check this empirically in T1.4. |
-| NO | no | Same short-sign caveat as YES. |
-| ME | I / me | Pointing sign (indexical). Trajectory is short and may be confusable with other pointing signs — candidate for the ambiguity pair, see below. |
-| YOU | you | Pointing sign directed outward. Differs from ME mainly in direction, not handshape — strong candidate for the ambiguity pair. |
-| DOCTOR | doctor | Core noun for this context. |
-| NURSE | nurse | Include only if visually distinct enough from DOCTOR to be worth the extra recording; owner's call. |
-| HOSPITAL | hospital | Core noun for this context. |
-| APPOINTMENT | appointment / booking | Central to the reception-desk scenario. |
-| MEDICINE | medicine / tablet | Core noun. |
-| PAIN | pain / hurt | Often accompanied by non-manual facial marking in ISL that the Stage 1 pipeline does not capture — a real, disclosable limitation. |
-| HELP | help | High-value verb for this context. |
-| WANT | want | Used in demo scene 1's example sentence (`ME DOCTOR MEET WANT`). |
-| NEED | need | Semantically close to WANT; confirm the two are visually distinct before recording both. |
-| MEET | meet | Used in demo scene 1's example sentence. |
-| WAIT | wait | Directly useful for the collision/hold scene's narrative. |
-| GO | go | Basic directional verb. |
-| COME | come | Reverse of GO; likely differs mainly in direction — second candidate for the ambiguity pair. |
-| HAVE | have | Basic possessive verb. |
-| WHAT | what | Question word. ISL commonly places question words at the end of the clause — this affects T1.8's gloss ordering, not just recognition. |
-| WHERE | where | Question word; same clause-position note as WHAT. |
-| WHO | who | Question word; same clause-position note as WHAT. |
-| WHEN | when | Question word; same clause-position note as WHAT. |
-| TODAY | today | Time marker. ISL typically establishes time at the start of a clause — relevant to T1.8's gloss ordering. |
-| TOMORROW | tomorrow | Time marker; may share a trajectory family with TODAY, so check their DTW distance in T1.4. |
-| NAME | name | Needed to set up the fingerspelling/refusal scene, since a person's name follows it. |
-| UNDERSTAND | understand | Lets the signer confirm or deny comprehension — directly supports the clarification scene's resume path. |
+| HELLO | hello / greetings | 36 clips — best-sampled class in the set. Opens demo scene 1; expect this to be among the most reliably recognized. |
+| THANK-YOU | thank you | 39 clips — best-sampled class. Dataset label is `thank you`; the space must be normalized on load. Natural demo closer. |
+| PLEASE | please | 18 clips. May be optional in ISL grammar — confirm whether it is normally signed or omitted rather than assuming English politeness maps across. |
+| YES | yes | 17 clips. Short sign, so fewer frames of signal; watch its confidence distribution in T1.4 rather than assuming it behaves like longer signs. |
+| NO | no | 17 clips. Same short-sign caveat as YES. |
+| YOU | you | 18 clips. Pointing/indexical sign. |
+| HE | he | 17 clips. Pointing sign. Paired with SHE as the primary ambiguity candidate — see open decision 1. |
+| SHE | she | 17 clips. Pointing sign differing from HE mainly in referent, not handshape — the strongest available candidate for demo scene 2's genuine confusion pair. |
+| HOSPITAL | hospital | 21 clips. Core noun anchoring the scenario. |
+| HELP | help | 16 clips — joint-lowest count in the active set. High-value verb for this context. |
+| GO | go | 17 clips. Directional verb. |
+| SIT | sit | 19 clips. "Please sit" is a natural reception-desk instruction and gives the Speech→Sign direction something concrete to render. |
+| OKAY | okay | 23 clips. Acknowledgment token; also the natural clean-follow-up segment that resumes the clarification ladder in FR-11. |
+| WHAT | what | 17 clips. ISL commonly places question words at the end of the clause — this constrains T1.8's gloss ordering, not just recognition. |
+| WHERE | where | 17 clips. Same clause-position note as WHAT. |
+| TODAY | today | 17 clips. ISL typically establishes time at the start of a clause — also relevant to T1.8's ordering. |
+
+**Total: 16 classes, 326 clips, min 16 per class.**
+
+---
+
+## Phase 2 vocabulary — deferred, not rejected
+
+Adding a class is a cheap retrain of the same small classifier head (T1.4), so
+none of this is structurally blocked. Two different reasons for deferral, and
+the distinction matters:
+
+**(a) Dropped for insufficient data — the corpus has these, but too few clips.**
+Training and holding out a test set on 2–6 examples cannot produce a calibrated
+confidence, and FR-2 forbids a placeholder. Recording additional takes would
+promote these cheaply, since the class already exists upstream.
+
+| gloss_id | clips available | note |
+|---|---|---|
+| WHEN | 2 | Question word; its absence leaves WHAT and WHERE covering the question-word role. |
+| ME | 3 | First-person indexical. Its absence is the most keenly felt gap — demo sentences must be built around YOU rather than ME. |
+| COME | 4 | Would have paired with GO as a directional ambiguity candidate. |
+| SORRY | 6 | Useful opener for an unscheduled walk-up. |
+
+**(b) Not in the corpus at all — require original recording.**
+These are the hospital-specific core. Every one needs 8–10 self-recorded takes
+(more than the 3–5 originally planned, to offset the class imbalance against
+the ~17-clip corpus classes).
+
+`DOCTOR`, `NURSE`, `APPOINTMENT`, `MEDICINE`, `PAIN`, `WANT`, `NEED`, `MEET`,
+`WAIT`, `HAVE`, `WHO`, `TOMORROW`, `NAME`, `UNDERSTAND`
+
+**Honest consequence to state plainly:** with `DOCTOR`, `MEDICINE`, `PAIN` and
+`APPOINTMENT` all deferred, Stage 1 does not yet cover the medical vocabulary
+its own scenario is built around. `HOSPITAL` and `HELP` carry the context alone.
+This is a disclosed limitation of the current build, not something to paper over
+in a demo narrative.
+
+## Also available free in the same corpus, if wanted
+
+24 further glosses ship with the dataset at no recording cost. Those with ≥15
+clips: `friend`(38), `school`(37), `market`(36), `okay`(23), `sit`(19),
+`eat`(18), `mother`(18), `water`(18), `food`(17), `she`(17), `he`(17),
+`sister`(17), `student`(17), `tea`(17), `teacher`(17), `drink`(16),
+`father`(16). Thin ones to avoid for the same reason as group (a) above:
+`home`(1), `stand`(2), `brother`(3), `goodbye`(3), `read`(3), `write`(3),
+`stop`(4).
 
 ---
 
 ## Entries deliberately excluded, and why
 
-These are **not** oversights. Each is excluded to make a specific demo scene
-work honestly.
+Not oversights — each protects a specific demo scene.
 
 | Excluded term | Why it stays out |
 |---|---|
-| Any personal name (e.g. a patient's name) | Must fall through to fingerspelling to satisfy FR-7 and demo scene 4. Adding a name sign would destroy the refusal scene. |
-| Any specific drug name (e.g. a branded medication) | Same as above — the intended out-of-vocabulary trigger for the `FINGERSPELLING` / `UNMATCHED` coverage path in T1.9. |
-| Numbers | ISL number handshapes are a system of their own, not 10 isolated signs. Recording them properly is a larger job than it looks, and nothing in the four Stage 1 demo scenes requires them. Defer unless the owner wants a number in the script. |
-| Fingerspelled alphabet handshapes | `spoken-to-signed-translation` supplies fingerspelling fallback as built-in behavior (architecture v3 §6.8) — it should not be reimplemented as vocabulary entries. |
+| Any personal name | Must fall through to fingerspelling to satisfy FR-7 and demo scene 4. A name sign would destroy the refusal scene. |
+| Any specific drug name | Same — the intended out-of-vocabulary trigger for the `FINGERSPELLING` / `UNMATCHED` coverage path in T1.9. |
+| Numbers | ISL number handshapes are a system, not 10 isolated signs. No Stage 1 demo scene requires one. |
+| Fingerspelled alphabet handshapes | Supplied by `spoken-to-signed-translation` as built-in behavior (architecture v3 §6.8) — but see the blocker below. |
 
-## Planned out-of-vocabulary trigger for demo scene 4
+## ⚠️ Blocker affecting demo scene 4 — verified 2026-09-15
 
-Pick **one** proper noun and rehearse it, so the refusal scene is deterministic
-rather than improvised. Owner to choose — a patient name is the most natural
-fit for a reception desk, and pairs with the in-vocabulary `NAME` sign to set it
-up (`NAME` + *[fingerspelled name]*).
+`spoken-to-signed-translation` ships fingerspelling lexicons for `ase, asq,
+bzs, cse, csq, eso, gsg, gss, ise, jos, lls, mfs, psr, sgg, ssp, svk, swl,
+tsm, ukl`. **`ins` (Indian Sign Language) is not among them** — `ise` is
+*Italian*, not Indian. There is therefore **no ISL fingerspelling data
+bundled**, so an out-of-vocabulary term will currently resolve `UNMATCHED`
+rather than `FINGERSPELLING`.
+
+Demo scene 4 is described in architecture v3 §10 as "the strongest 25 seconds."
+Three options, to decide before T1.9:
+
+1. Build a minimal ISL manual-alphabet lexicon. ISL uses a **two-handed**
+   alphabet, structurally unlike ASL's one-handed one, so ASL poses are not a
+   silent substitute.
+2. Fall back to ASL (`ase`) fingerspelling and **say so explicitly** in the
+   demo and the decision log — a disclosed substitution, never an unmarked one.
+3. Let the scene resolve `UNMATCHED` and present refusal itself as the outcome.
+   This is arguably the most honest option and still demonstrates
+   refuse-to-fabricate (FR-12), just without a fallback rendering.
+
+Verified alongside this: `--signed-language` is **not** validated against an
+ISO allowlist (`gloss_to_pose/languages.py` holds only a two-entry backup map),
+so `ins` is safe to use as a free-form selector. This closes the question T1.9
+flagged as unverified.
 
 ---
 
 ## Open decisions for the owner
 
-1. **Cut to fit rehearsal time.** 30 entries is an upper bound, not a target.
-   Every entry needs at least 3–5 recorded takes for T1.3/T1.4. If that is more
-   recording than the timeline allows, cut from the bottom: `NURSE`, `NEED`,
-   `WHO`, `WHEN`, `TOMORROW`, `HAVE` are the least load-bearing for the four
-   Stage 1 demo scenes.
-2. **Do not pre-pick the ambiguity pair.** Demo scene 2 needs two signs the
-   classifier *genuinely* confuses, so the low confidence is real rather than
-   staged — FR-2 requires a calibrated confidence value, not a placeholder.
-   Confusability here is a property of **pose trajectory similarity**, which is
-   what T1.4's DTW distance actually measures — not of linguistic similarity,
-   and not something to guess in advance. After T1.3 extraction, compute the
-   pairwise DTW distance matrix across all entries and pick the closest real
-   pair. `ME`/`YOU` and `GO`/`COME` are flagged above as likely candidates, but
-   the measurement decides, not this document.
-3. **Confirm the articulation notes.** See the honesty note at the top. The
-   `notes` column is unvalidated and should be corrected against a real ISL
-   reference before recording begins.
-4. **Decide on `PLEASE`.** If it is not naturally signed in ISL for this
-   context, drop it rather than record an artificial sign.
+1. **Confirm the ambiguity pair empirically, don't assume it.** Demo scene 2
+   needs two signs the classifier *genuinely* confuses, so the low confidence is
+   real rather than staged (FR-2). Confusability here is **pose-trajectory**
+   similarity — what T1.4 actually measures — not linguistic similarity. After
+   T1.3 extraction, compute the pairwise distance matrix across all 16 classes
+   and pick the closest real pair. `HE`/`SHE` is the strongest prior candidate,
+   but the measurement decides.
+2. **Resolve the fingerspelling blocker** above before T1.9.
+3. **Confirm the articulation notes.** Per the honesty note, the `notes` column
+   is unvalidated.
+4. **Decide on `PLEASE`.** If it is not naturally signed in ISL here, drop it
+   rather than keep an artificial entry.
 
-## Recording checklist (feeds T1.3)
+## Extraction checklist (feeds T1.3)
+
+No recording is required for the active 16 — the pipeline runs on downloaded
+clips. For Phase 2 group (b), when recording does happen:
 
 - One subdirectory per `gloss_id` under `data/vocab/raw_video/`.
-- 3–5 takes per sign, varying speed slightly, so T1.4 has a real distance
-  distribution to calibrate confidence against rather than a single exemplar.
-- Fixed camera position, consistent lighting, upper body and both hands fully
-  in frame for the whole sign.
-- Record one clean take of the chosen out-of-vocabulary name too — not as
-  vocabulary, but so the refusal scene can be rehearsed end to end.
+- **8–10 takes** per sign, varying speed slightly, to offset imbalance against
+  the corpus classes' ~17 clips.
+- Fixed camera, consistent lighting, upper body and both hands fully in frame
+  for the entire sign.
+- Also record one clean take of the chosen out-of-vocabulary name, so the
+  refusal scene can be rehearsed end to end.

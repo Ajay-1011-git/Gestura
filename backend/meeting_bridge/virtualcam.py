@@ -12,10 +12,25 @@ both sinks as if OBS provided them; verified on 2026-09-15, it does not.
 
 Manual pre-steps, deliberately not automated for Stage 1:
 
-1. Open OBS, click **Start Virtual Camera**, approve the system extension in
-   System Settings, and restart if prompted.
+1. Open OBS and click **Start Virtual Camera** once, approving the system
+   extension in System Settings and restarting if prompted. That installs the
+   camera extension; OBS need not be running afterwards.
 2. ``brew install blackhole-2ch``, then set ``OBS_VIRTUALCAM_DEVICE`` or pass
    the device name explicitly.
+
+**Checking it works means opening a consumer, not OBS.** Photo Booth, QuickTime's
+New Movie Recording, or a browser camera test, with "OBS Virtual Camera"
+selected there. OBS's own preview window shows OBS's *scene* — it is the other
+end of the pipe — and will never show frames written by this module, whatever
+this module is doing. That is worth stating plainly because the failure is
+silent in both directions: `pyvirtualcam` reports a healthy 30fps whether or not
+anything is consuming the device, so "the code says it sent 2700 frames" and
+"nothing is visible" are entirely compatible and neither one diagnoses the other.
+
+Confirmed on 2026-09-15: frames written here do reach Photo Booth with "OBS
+Virtual Camera" selected. Whether OBS's own Virtual Camera can be running at the
+same time was not established — if frames ever stop arriving, stopping it is the
+first thing to rule out, but there is no evidence it has to be stopped.
 """
 
 from __future__ import annotations

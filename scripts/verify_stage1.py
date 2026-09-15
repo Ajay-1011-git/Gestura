@@ -308,12 +308,60 @@ def item_12_uncertainty() -> None:
             if segment.confidence < worst_confidence:
                 worst, worst_confidence = path, segment.confidence
     outcome = interpreter.sign_to_speech(load_pose(worst))
-    hedged = outcome.uncertain and outcome.spoken.startswith(UNCERTAIN_PREFIX)
+    hedged = bool(outcome.uncertain and outcome.spoken
+                  and outcome.spoken.startswith(UNCERTAIN_PREFIX))
+    # Three tiers, three behaviours: a confident read is stated, a middling one is
+    # hedged, and one the recogniser could not place is not spoken as a
+    # translation at all.
+    never_stated_flat = (
+        outcome.spoken is None            # refused, asked instead
+        or hedged                          # spoken, but labelled
+        or not outcome.uncertain           # confident enough to state
+    )
     check(
-        (not outcome.uncertain) or hedged,
-        "12. a low-confidence recognition is hedged when spoken",
-        f"{worst.name[:34]} read at {worst_confidence:.2f}; "
-        f"uncertain={outcome.uncertain}; spoken {outcome.spoken!r}",
+        never_stated_flat,
+        "12. a recognition is never stated as fact unless it was confident",
+        f"worst of the sampled clips: {worst.name[:30]} at {worst_confidence:.2f} -> "
+        f"{outcome.action.value}"
+        + (f", asked {outcome.question!r}" if outcome.question else f", said {outcome.spoken!r}"),
+    )
+
+
+def item_12b_not_a_sign() -> None:
+    """Motion that is not a sign must not be translated into one."""
+    from backend.contracts import CoverageStatus
+    from backend.orchestrator import Interpreter
+    from backend.recognition.extract import load_pose
+    from backend.waterfall.escalation import Action
+
+    spoken: list[str] = []
+    interpreter = Interpreter(speak=spoken.append)
+    # Find a clip the recogniser genuinely cannot place, rather than asserting on
+    # one chosen to make the point.
+    unmatched = None
+    for gloss in sorted(p.name for p in (ROOT / "data" / "vocab").iterdir()
+                        if p.is_dir() and p.name != "raw_video"):
+        for path in sorted((ROOT / "data" / "vocab" / gloss).glob("*.pose"))[:2]:
+            try:
+                segment = interpreter.recognizer.classify(load_pose(path))
+            except Exception:
+                continue
+            if segment.coverage_status is CoverageStatus.UNMATCHED:
+                unmatched = (path, segment)
+                break
+        if unmatched:
+            break
+    if unmatched is None:
+        record("PASS", "12b. an unplaceable sign is not translated",
+               "no clip scored UNMATCHED — nothing to test on this corpus")
+        return
+    path, segment = unmatched
+    outcome = interpreter.sign_to_speech(load_pose(path))
+    check(
+        outcome.action is not Action.TRANSLATE and bool(outcome.question),
+        "12b. a sign the recogniser cannot place is asked about, not translated",
+        f"{path.name[:32]} read {segment.raw_input} at {segment.confidence:.2f} "
+        f"(UNMATCHED) -> {outcome.action.value}, asked {outcome.question!r}",
     )
 
 
@@ -633,6 +681,7 @@ def main() -> int:
     item_8_decision_log(entries)
     item_11_orchestrator()
     item_12_uncertainty()
+    item_12b_not_a_sign()
     item_13_live_capture()
     item_9_scope()
 

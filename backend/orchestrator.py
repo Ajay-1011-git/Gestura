@@ -113,13 +113,27 @@ class Interpreter:
 
     def sign_to_speech(self, pose) -> Outcome:
         segment = self.recognizer.classify(pose)
+
+        # An UNMATCHED recognition is the bottom of the same four-tier status the
+        # Speech->Sign direction uses, and it has to mean the same thing in both:
+        # there is nothing here worth saying. Without this the first low-confidence
+        # segment is spoken before hysteresis can fire — live, someone simply
+        # moving in frame produced "I think they signed: School." at confidence
+        # 0.03. Passing it as unmatched makes the waterfall refuse instead, which
+        # is FR-12 applied to the direction it was not originally written for.
+        unrecognised = segment.coverage_status is CoverageStatus.UNMATCHED
         decision = self.waterfall.process(
-            segment, candidates=self._candidates(pose, segment)
+            segment,
+            candidates=self._candidates(pose, segment),
+            unmatched=[segment.raw_input] if unrecognised else [],
         )
 
         if decision.action is not Action.TRANSLATE:
             question = None
-            if decision.action is Action.CLARIFY and len(decision.candidates) >= 2:
+            if unrecognised:
+                # Refusing silently would leave the signer waiting. Say so.
+                question = "I didn't catch that sign — could you sign it again?"
+            elif decision.action is Action.CLARIFY and len(decision.candidates) >= 2:
                 question = (f"Did you sign {decision.candidates[0]} or "
                             f"{decision.candidates[1]}?")
             elif decision.action is Action.CLARIFY:

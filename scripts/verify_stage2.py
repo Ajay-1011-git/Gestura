@@ -264,20 +264,38 @@ def e8_e9_scope() -> None:
     out_of_scope = [
         "backend/recognition/classifier.py",
         "backend/recognition/capture.py",
+        "backend/recognition/extract.py",
         "backend/speech_to_sign/pose_smoothing.py",
     ]
+    # Compare against the last Stage 1 commit, not against HEAD. `git diff HEAD`
+    # only sees uncommitted work, so once Stage 2 was committed this check passed
+    # by looking at an empty diff — a green tick for a check that had stopped
+    # testing anything. The baseline is the commit Stage 2 started from.
     try:
+        baseline = subprocess.run(
+            ["git", "log", "--format=%H", "--grep", "Don't translate motion that isn't a sign",
+             "-1"], cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if not baseline:
+            return check("E8/E9 out-of-scope files untouched", SKIP,
+                         "could not locate the Stage 1 baseline commit")
         changed = subprocess.run(
+            ["git", "diff", "--name-only", f"{baseline}..HEAD"], cwd=ROOT,
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+        changed += subprocess.run(
             ["git", "diff", "--name-only", "HEAD"], cwd=ROOT,
             capture_output=True, text=True, check=True,
         ).stdout.split()
     except Exception as exc:
         return check("E8/E9 out-of-scope files untouched", SKIP, f"git unavailable: {exc}")
 
-    touched = [f for f in out_of_scope if f in changed]
-    vocab_touched = [f for f in changed if f.startswith("data/vocab/")]
+    touched = sorted({f for f in out_of_scope if f in changed})
+    vocab_touched = sorted({f for f in changed if f.startswith("data/vocab/")})
     check("E8/E9 no out-of-scope Stage 1 file touched",
           PASS if not touched and not vocab_touched else FAIL,
+          f"compared {baseline[:8]}..HEAD plus the working tree "
+          f"({len(set(changed))} files changed in Stage 2)\n"
           f"forbidden files changed: {touched or 'none'}\n"
           f"data/vocab/ changed: {vocab_touched or 'none'}")
 

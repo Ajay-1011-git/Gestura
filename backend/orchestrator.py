@@ -387,7 +387,12 @@ class Interpreter:
     def close(self) -> None:
         """End the call. FR-18's discard, made an explicit act rather than a hope."""
         self.session_glossary.discard()
-        safe_mode_module.register(None)
+        # Deregister only if this session is still the registered one. Clearing
+        # unconditionally would silently switch off safe-mode routing for a
+        # second Interpreter that is still running — unlikely given one session
+        # per process, but a wrong thing to do rather than merely an unused one.
+        if safe_mode_module.current() is self.safe_mode:
+            safe_mode_module.register(None)
 
     def __enter__(self) -> "Interpreter":
         return self

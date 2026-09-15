@@ -1,0 +1,167 @@
+{
+  "override": "running",
+  "entries": [
+    {
+      "timestamp": 1789457109.139304,
+      "stage": "OBSERVE",
+      "segment_id": "78114c0f-741e-40ea-9a2f-e9699dba44c2",
+      "detail": "sign_to_speech: 'HELLO', confidence 0.87, coverage lexicon_hit"
+    },
+    {
+      "timestamp": 1789457109.139311,
+      "stage": "DECIDE",
+      "segment_id": "78114c0f-741e-40ea-9a2f-e9699dba44c2",
+      "detail": "confidence 0.87 >= 0.22, resolved at local lookup"
+    },
+    {
+      "timestamp": 1789457109.139313,
+      "stage": "ACTION",
+      "segment_id": "78114c0f-741e-40ea-9a2f-e9699dba44c2",
+      "detail": "TRANSLATE 'HELLO'"
+    },
+    {
+      "timestamp": 1789457109.237994,
+      "stage": "OBSERVE",
+      "segment_id": "bf0dce3c-6050-4d71-97b7-0433c6516c88",
+      "detail": "sign_to_speech: 'HE', confidence 0.08, coverage unmatched"
+    },
+    {
+      "timestamp": 1789457109.2379992,
+      "stage": "DECIDE",
+      "segment_id": "bf0dce3c-6050-4d71-97b7-0433c6516c88",
+      "detail": "session_glossary: miss (Stage 2 hook, inert)"
+    },
+    {
+      "timestamp": 1789457109.2380002,
+      "stage": "DECIDE",
+      "segment_id": "bf0dce3c-6050-4d71-97b7-0433c6516c88",
+      "detail": "domain_glossary: miss (Stage 2 hook, inert)"
+    },
+    {
+      "timestamp": 1789457109.2380018,
+      "stage": "DECIDE",
+      "segment_id": "bf0dce3c-6050-4d71-97b7-0433c6516c88",
+      "detail": "agent_reprocessing: unavailable (Stage 3 hook, inert)"
+    },
+    {
+      "timestamp": 1789457109.238003,
+      "stage": "DECIDE",
+      "segment_id": "bf0dce3c-6050-4d71-97b7-0433c6516c88",
+      "detail": "low confidence 0.08 but only 1/2 consecutive \u2014 hysteresis not met, proceeding with uncertainty marked"
+    },
+    {
+      "timestamp": 1789457109.238004,
+      "stage": "ACTION",
+      "segment_id": "bf0dce3c-6050-4d71-97b7-0433c6516c88",
+      "detail": "TRANSLATE 'HE' (marked uncertain)"
+    },
+    {
+      "timestamp": 1789457109.339069,
+      "stage": "OBSERVE",
+      "segment_id": "3b6a9239-e470-4c5e-9553-d17b9a1292b4",
+      "detail": "sign_to_speech: 'HE', confidence 0.04, coverage unmatched"
+    },
+    {
+      "timestamp": 1789457109.339075,
+      "stage": "DECIDE",
+      "segment_id": "3b6a9239-e470-4c5e-9553-d17b9a1292b4",
+      "detail": "session_glossary: miss (Stage 2 hook, inert)"
+    },
+    {
+      "timestamp": 1789457109.339075,
+      "stage": "DECIDE",
+      "segment_id": "3b6a9239-e470-4c5e-9553-d17b9a1292b4",
+      "detail": "domain_glossary: miss (Stage 2 hook, inert)"
+    },
+    {
+      "timestamp": 1789457109.339076,
+      "stage": "DECIDE",
+      "segment_id": "3b6a9239-e470-4c5e-9553-d17b9a1292b4",
+      "detail": "agent_reprocessing: unavailable (Stage 3 hook, inert)"
+    },
+    {
+      "timestamp": 1789457109.3390841,
+      "stage": "DECIDE",
+      "segment_id": "3b6a9239-e470-4c5e-9553-d17b9a1292b4",
+      "detail": "2 consecutive low-confidence segments; two defensible candidates HE/SHE \u2014 asking a targeted question"
+    },
+    {
+      "timestamp": 1789457109.339086,
+      "stage": "ACTION",
+      "segment_id": "3b6a9239-e470-4c5e-9553-d17b9a1292b4",
+      "detail": "CLARIFY \u2014 stalling both sides at once"
+    },
+    {
+      "timestamp": 1789457109.4376168,
+      "stage": "OBSERVE",
+      "segment_id": "0dd85f97-2b6c-4ccf-ae0f-ab32da70aeaf",
+      "detail": "sign_to_speech: 'HELLO', confidence 0.84, coverage lexicon_hit"
+    },
+    {
+      "timestamp": 1789457109.4376209,
+      "stage": "OBSERVE",
+      "segment_id": "0dd85f97-2b6c-4ccf-ae0f-ab32da70aeaf",
+      "detail": "clean segment received"
+    },
+    {
+      "timestamp": 1789457109.4376209,
+      "stage": "ACTION",
+      "segment_id": "0dd85f97-2b6c-4ccf-ae0f-ab32da70aeaf",
+      "detail": "translation resumed; entering cooldown"
+    },
+    {
+      "timestamp": 1789457109.437624,
+      "stage": "DECIDE",
+      "segment_id": "0dd85f97-2b6c-4ccf-ae0f-ab32da70aeaf",
+      "detail": "confidence 0.84 >= 0.22, resolved at local lookup"
+    },
+    {
+      "timestamp": 1789457109.437624,
+      "stage": "ACTION",
+      "segment_id": "0dd85f97-2b6c-4ccf-ae0f-ab32da70aeaf",
+      "detail": "TRANSLATE 'HELLO'"
+    },
+    {
+      "timestamp": 1789457109.466996,
+      "stage": "OBSERVE",
+      "segment_id": "9afb276e-356b-4cd4-b6b8-ce5d347cdf4a",
+      "detail": "speech_to_sign: 'HOSPITAL WHERE RAJESH', confidence 0.95, coverage unmatched"
+    },
+    {
+      "timestamp": 1789457109.466998,
+      "stage": "DECIDE",
+      "segment_id": "9afb276e-356b-4cd4-b6b8-ce5d347cdf4a",
+      "detail": "no validated sign for RAJESH; lexicon miss is terminal"
+    },
+    {
+      "timestamp": 1789457109.466999,
+      "stage": "ACTION",
+      "segment_id": "9afb276e-356b-4cd4-b6b8-ce5d347cdf4a",
+      "detail": "REFUSE \u2014 will not fabricate a sign for RAJESH"
+    },
+    {
+      "timestamp": 1789457109.467014,
+      "stage": "OBSERVE",
+      "segment_id": "collision",
+      "detail": "[idle/silence] CONTINUE: queued routine: 'Please sit down'"
+    },
+    {
+      "timestamp": 1789457109.4670193,
+      "stage": "OBSERVE",
+      "segment_id": "collision",
+      "detail": "[signing/silence] CONTINUE: started clip 'Please sit down' (waited 0.00s)"
+    },
+    {
+      "timestamp": 1789457109.4670217,
+      "stage": "OBSERVE",
+      "segment_id": "collision",
+      "detail": "[signing/voice_detected] CONTINUE: voice detected, awaiting debounce"
+    },
+    {
+      "timestamp": 1789457110.2229345,
+      "stage": "OBSERVE",
+      "segment_id": "collision",
+      "detail": "[signing/silence] CONTINUE: audio returned to silence"
+    }
+  ]
+}

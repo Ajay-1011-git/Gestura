@@ -190,11 +190,18 @@ class EscalationWaterfall:
 
         confident = segment.confidence >= self.confident_threshold
 
-        # 2. Confident and covered: resolve at the cheapest step, pay for nothing more.
+        # 2. Update hysteresis first. A clean segment arriving mid-clarification
+        #    is the resume signal (§4.1), and it has to clear the clarification
+        #    state *before* the confidence branch — otherwise a high-confidence
+        #    segment falls through to the escalation path and the log reports it
+        #    as "low confidence 0.84", which is both wrong and exactly the kind
+        #    of thing the decision log exists not to do.
+        self._note_clean_or_low(segment, low=not confident)
+
+        # 3. Confident and covered: resolve at the cheapest step, pay for nothing more.
         if confident and self.state.active_clarification is ClarificationLevel.NONE:
             self._emit("DECIDE", sid, f"confidence {segment.confidence:.2f} >= {self.confident_threshold:.2f}, resolved at local lookup")
             self._emit("ACTION", sid, f"TRANSLATE {segment.raw_input!r}")
-            self._note_clean_or_low(segment, low=False)
             return Decision(
                 action=Action.TRANSLATE,
                 segment=segment,
@@ -202,9 +209,8 @@ class EscalationWaterfall:
                 reason="confident_lexicon_hit",
             )
 
-        # 3. Escalate. Each rung is cheap and reported, including the inert ones,
+        # 4. Escalate. Each rung is cheap and reported, including the inert ones,
         #    so the trace shows the ladder rather than implying a single threshold.
-        self._note_clean_or_low(segment, low=not confident)
         stage = Stage.LOCAL_LOOKUP
 
         for step, resolver in (

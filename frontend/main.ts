@@ -3,75 +3,97 @@ import { Buffer } from "buffer";
 
 import * as THREE from "three";
 import { loadAvatar, createIsolatedScene } from "./avatar/loader";
-import { loadPoseSequence, PoseRetargeter, toMediaPipePose } from "./avatar/retarget";
-import * as Kalido from "kalidokit";
-(globalThis as any).__K = Kalido;
-
-const W = 900, H = 900;
+import { loadPoseSequence, PoseRetargeter } from "./avatar/retarget";
+import { DecisionLogPanel, loadLog } from "./decision_log_panel/panel";
 
 async function main() {
+  const wrap = document.getElementById("canvas-wrap") as HTMLElement;
+  const hud = document.getElementById("hud") as HTMLElement;
+  const panel = new DecisionLogPanel(document.getElementById("panel") as HTMLElement);
+
   const avatar = await loadAvatar("/avatar.glb");
-  const { scene, camera } = createIsolatedScene(avatar, W, H);
+  const width = wrap.clientWidth, height = wrap.clientHeight;
+  const { scene, camera } = createIsolatedScene(avatar, width, height);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-  renderer.setSize(W, H);
-  document.body.appendChild(renderer.domElement);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(width, height);
+  wrap.appendChild(renderer.domElement);
+
+  // Frame the signing space: chest to just above the head.
+  const chest = avatar.bones.get("chest") ?? avatar.bones.get("spine")!;
+  const centre = chest.getWorldPosition(new THREE.Vector3());
+  camera.position.set(centre.x, centre.y + 0.18, centre.z + 1.3);
+  camera.lookAt(centre.x, centre.y + 0.12, centre.z);
 
   const seq = await loadPoseSequence("/demo_sequence.pose");
   const retargeter = new PoseRetargeter(avatar);
 
-  // Frame this on the upper body — signing happens between chest and head.
-  const chest = avatar.bones.get("chest") ?? avatar.bones.get("spine")!;
-  const centre = chest.getWorldPosition(new THREE.Vector3());
-  camera.position.set(centre.x, centre.y + 0.15, centre.z + 1.25);
-  camera.lookAt(centre.x, centre.y + 0.1, centre.z);
+  const log = await loadLog("/decision_log.json");
+  panel.setEntries(log.entries);
 
-  const track = (name: string) => {
-    const b = avatar.bones.get(name as any)!;
-    return b.quaternion.clone();
-  };
+  hud.innerHTML =
+    `<b>Gestura</b> — Stage 1<br>` +
+    `sequence &nbsp;HELLO YOU SIT PLEASE<br>` +
+    `${seq.frameCount} frames @ ${seq.fps}fps (${(seq.frameCount / seq.fps).toFixed(2)}s)<br>` +
+    `bones mapped &nbsp;${avatar.report.mappedCount}/${avatar.report.boneCount} &nbsp;` +
+    `rig ${avatar.report.poseType}`;
 
-  const state: any = {
-    fps: seq.fps, frameCount: seq.frameCount,
-    components: Object.fromEntries(Object.entries(seq.componentPoints).map(([k, v]) => [k, v.length])),
-    samples: [],
-  };
+  const scrub = document.getElementById("scrub") as HTMLInputElement;
+  const playButton = document.getElementById("play") as HTMLButtonElement;
+  const frameLabel = document.getElementById("frameLabel") as HTMLElement;
+  scrub.max = String(seq.frameCount - 1);
 
-  const rest = { l: track("leftUpperArm"), r: track("rightUpperArm"), lh: track("leftHand") };
-  const capture: number[] = [];
+  let frame = 0, playing = true, last = performance.now(), accumulator = 0;
 
-  (window as any).__render = (frame: number) => {
-    retargeter.reset();
-    const written = retargeter.applyFrame(seq, frame);
-    for (let i = 0; i < 6; i++) retargeter.applyFrame(seq, frame); // let slerp converge
+  const show = (index: number) => {
+    retargeter.applyFrame(seq, index);
     avatar.gltfScene.updateMatrixWorld(true);
     renderer.render(scene, camera);
-    const l = track("leftUpperArm"), r = track("rightUpperArm");
-    return {
-      frame, written,
-      leftUpperArmDeltaDeg: THREE.MathUtils.radToDeg(rest.l.angleTo(l)),
-      rightUpperArmDeltaDeg: THREE.MathUtils.radToDeg(rest.r.angleTo(r)),
-      leftHandDeltaDeg: THREE.MathUtils.radToDeg(rest.lh.angleTo(track("leftHand"))),
-      drivenBones: retargeter.driven.size,
-    };
+    frameLabel.textContent =
+      `frame ${String(index).padStart(3)} / ${seq.frameCount - 1}  ·  ${retargeter.driven.size} bones driven`;
   };
 
-  // sanity: confirm landmarks land at real MediaPipe indices, not densely packed
-  const lm = toMediaPipePose(seq.frames[Math.floor(seq.frameCount / 2)], seq.componentPoints, seq.width, seq.height);
-  state.landmarkCheck = {
-    leftShoulder11: lm[11].visibility > 0,
-    rightShoulder12: lm[12].visibility > 0,
-    leftWrist15: lm[15].visibility > 0,
-    nose0_shouldBeEmpty: lm[0].visibility === 0,
-    populated: lm.filter((p) => p.visibility > 0).length,
+  playButton.addEventListener("click", () => {
+    playing = !playing;
+    playButton.textContent = playing ? "▶ PLAY" : "❚❚ PAUSED";
+  });
+  scrub.addEventListener("input", () => {
+    playing = false; playButton.textContent = "❚❚ PAUSED";
+    frame = Number(scrub.value); retargeter.reset(); show(frame);
+  });
+  // The supervisor override halts avatar output, exactly as it would live.
+  panel.onOverrideChange = (paused) => {
+    if (paused) { playing = false; playButton.textContent = "❚❚ PAUSED"; }
   };
 
-  (window as any).__seq = state;
-  (window as any).__seqObj = seq;
+  const loop = (now: number) => {
+    const dt = (now - last) / 1000; last = now;
+    if (playing && !panel.isPaused) {
+      accumulator += dt;
+      const step = 1 / seq.fps;
+      while (accumulator >= step) {
+        accumulator -= step;
+        frame = (frame + 1) % seq.frameCount;
+        if (frame === 0) retargeter.reset();
+      }
+      scrub.value = String(frame);
+      show(frame);
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+
+  addEventListener("resize", () => {
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+  });
+
   (window as any).__ready = true;
-  void capture;
+  (window as any).__info = { frames: seq.frameCount, logEntries: panel.count, bones: avatar.report.mappedCount };
 }
 main().catch((e) => {
-  (window as any).__seq = { error: String(e), stack: String(e?.stack).slice(0, 400) };
+  (document.getElementById("hud") as HTMLElement).textContent = "ERROR: " + e;
   (window as any).__ready = true;
+  (window as any).__info = { error: String(e) };
 });

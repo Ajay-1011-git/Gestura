@@ -37,6 +37,7 @@ from spoken_to_signed.text_to_gloss.types import GlossItem
 from backend.contracts import CoverageStatus
 from backend.recognition.classifier import active_segment, _hand_present
 from backend.recognition.extract import extract_pose_file, load_pose
+from backend.speech_to_sign import fingerspell
 
 SPOKEN_LANGUAGE = "en"
 SIGNED_LANGUAGE = "ins"  # ISO 639-3 for Indian Sign Language; free-form here
@@ -45,15 +46,22 @@ INDEX_COLUMNS = [
     "segment_start", "segment_end", "words", "glosses", "priority",
 ]
 
-# Stage 1 ships no ISL manual alphabet, so fingerspelling cannot be rendered.
-# A candidate source exists — Hemg/Indian_sign_language_dataset carries the real
-# two-handed ISL alphabet, A-Z plus digits, 42,745 images — but its images are
-# 128px hand crops with no torso, and the avatar needs body landmarks to place
-# hands in signing space. Synthesizing a body would mean inventing data the
-# source does not contain, which is the fabrication this project exists to
-# refuse. Out-of-vocabulary terms therefore surface as UNMATCHED: a visible,
-# logged refusal (FR-12) rather than a plausible-looking wrong sign.
-FINGERSPELLING_STATUS = "unavailable_for_isl"
+# Stage 2 (T2.6) made this tier reachable. Stage 1 shipped no ISL manual
+# alphabet and said so here: the candidate source it named
+# (Hemg/Indian_sign_language_dataset) is 128px hand crops with no torso, and the
+# avatar needs body landmarks to place hands in signing space. That assessment
+# was correct for that dataset and still is.
+#
+# What changed is the source. `kirandevraj/ISL-Fingerspelling` carries
+# full-body signer video with per-letter frame alignment and a stated
+# CC-BY-NC-4.0 license, so the handshapes could be extracted through T1.3's
+# pipeline with real body landmarks intact. See
+# `scripts/build_fingerspelling.py` and `data/fingerspelling/manifest.md`.
+#
+# The refusal rule is unchanged: an out-of-vocabulary term is spelled, never
+# assigned an invented sign, and spelled output stays tagged FINGERSPELLING so
+# the coverage report still distinguishes it from a real lexicon hit.
+FINGERSPELLING_STATUS = "isl_manual_alphabet"
 
 COVERAGE_MAP = {
     CoverageType.LEXICON: CoverageStatus.LEXICON_HIT,
@@ -65,6 +73,16 @@ COVERAGE_MAP = {
 
 class LookupError_(RuntimeError):
     """Gloss could not be resolved to a pose sequence."""
+
+
+def _is_spellable(token: str) -> bool:
+    """Does this token contain at least one letter the manual alphabet covers?
+
+    Kept deliberately narrow: a token that is entirely digits or punctuation is
+    not spellable by a 26-letter alphabet and must stay UNMATCHED rather than
+    producing an empty "spelling" that reads downstream as a success.
+    """
+    return any(c in fingerspell.ALPHABET for c in token.lower())
 
 
 @dataclass(frozen=True)
@@ -207,17 +225,39 @@ class GlossLookup:
             })
 
     def coverage_for(self, tokens: list[str]) -> tuple[TokenCoverage, ...]:
-        """Per-token coverage without building the pose (FR-8)."""
+        """Per-token coverage without building the pose (FR-8).
+
+        Stage 2 (T2.6) added the third outcome. A token with no lexicon match
+        and no language-backup match is no longer automatically UNMATCHED: if
+        the ISL manual alphabet can spell it, it is reported FINGERSPELLING and
+        the caller renders the spelling. UNMATCHED now means what it always
+        should have — nothing here can be signed *or* spelled (FR-27, FR-28).
+        """
         known = {w.lower() for w in self.vocabulary}
-        return tuple(
-            TokenCoverage(
-                gloss=token,
-                status=CoverageStatus.LEXICON_HIT
-                if token.lower().replace("-", " ") in known or token.lower() in known
-                else CoverageStatus.UNMATCHED,
+        spellable = fingerspell.is_available()
+        statuses = []
+        for token in tokens:
+            if token.lower().replace("-", " ") in known or token.lower() in known:
+                statuses.append(TokenCoverage(token, CoverageStatus.LEXICON_HIT))
+                continue
+            if spellable and _is_spellable(token):
+                statuses.append(TokenCoverage(token, CoverageStatus.FINGERSPELLING))
+                continue
+            statuses.append(TokenCoverage(token, CoverageStatus.UNMATCHED))
+        return tuple(statuses)
+
+    def fingerspell(self, token: str) -> "fingerspell.SpellResult":
+        """Spell one out-of-vocabulary token. Only valid after a real miss.
+
+        Guarded rather than trusting the caller: spelling a token the lexicon
+        can actually sign would silently downgrade a real sign to its letters.
+        """
+        known = {w.lower() for w in self.vocabulary}
+        if token.lower().replace("-", " ") in known or token.lower() in known:
+            raise LookupError_(
+                f"{token!r} has a validated sign — refusing to fingerspell it instead"
             )
-            for token in tokens
-        )
+        return fingerspell.spell(token)
 
     def lookup(self, gloss: str) -> LookupResult:
         """Resolve a gloss string to a pose sequence plus per-token coverage.

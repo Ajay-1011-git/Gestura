@@ -28,15 +28,22 @@ from typing import Callable
 import numpy as np
 
 from backend.collision.state_machine import CollisionManager, HoldDecision
-from backend.contracts import CoverageStatus, Direction, Segment
+from backend.contracts import (
+    CoverageStatus, DecisionLogEntry, Direction, DomainContext, Segment,
+)
 from backend.recognition.classifier import SignClassifier, pose_features
 from backend.recognition.extract import load_pose
+from backend.resilience import safe_mode as safe_mode_module
+from backend.resilience.safe_mode import SafeMode
+from backend.speech_to_sign import fingerspell
 from backend.speech_to_sign.gloss_lookup import GlossLookup
 from backend.speech_to_sign.pose_smoothing import build_avatar_sequence, smooth
 from backend.speech_to_sign.reasoning import GlossError, to_gloss
 from backend.sign_to_speech.reasoning import ReasoningError, reconstruct_sentence
 from backend.waterfall.decision_log import DecisionLog
+from backend.waterfall.domain_glossary import DomainGlossary, DomainGlossaryError
 from backend.waterfall.escalation import Action, EscalationWaterfall
+from backend.waterfall.session_glossary import SessionGlossary
 
 ROOT = Path(__file__).resolve().parent.parent
 RECOGNIZER = ROOT / "data" / "models" / "recognizer.pt"
@@ -65,6 +72,50 @@ class Outcome:
     timeline: list = field(default_factory=list)
     question: str | None = None
     uncertain: bool = False
+    # Stage 2. `unrendered` carries FR-21/NFR-9's label: set whenever safe mode
+    # suppressed the avatar work this outcome would otherwise have produced, so
+    # a degraded result can never be presented identically to a confident one.
+    unrendered: str | None = None
+    fingerspelled: tuple[str, ...] = ()
+
+
+def _resolve_domain(domain: DomainContext | str | None) -> DomainContext:
+    """The room's domain, supplied by a human at session start — never inferred.
+
+    Falls back to the DOMAIN_GLOSSARY_DEFAULT env var, then to GENERAL. An
+    unrecognised value raises rather than silently defaulting: quietly running a
+    medical deployment against the general glossary because someone typed
+    "medicine" is precisely the wrong-domain resolution FR-20 forbids.
+    """
+    import os
+
+    if domain is None:
+        domain = os.environ.get("DOMAIN_GLOSSARY_DEFAULT", "").strip() or "general"
+    if isinstance(domain, DomainContext):
+        return domain
+    try:
+        return DomainContext(str(domain).strip().lower())
+    except ValueError:
+        valid = ", ".join(d.value for d in DomainContext)
+        raise ValueError(f"unknown domain {domain!r} — expected one of: {valid}") from None
+
+
+def _load_domain_glossary(domain: DomainContext, log: DecisionLog) -> DomainGlossary | None:
+    """Load the selected domain's manifest, or run without one if it is absent.
+
+    A missing manifest is not fatal — the rung simply stays a passthrough and
+    the ladder continues to LLM reasoning, which is what Stage 1 did. It is
+    logged, though: silently running without the domain vocabulary someone
+    selected would be a worse failure than not offering domains at all.
+    """
+    try:
+        return DomainGlossary(domain, on_log=log.add)
+    except DomainGlossaryError as exc:
+        log.add(DecisionLogEntry(
+            timestamp=time.time(), stage="OBSERVE", segment_id="domain_glossary",
+            detail=f"no usable {domain.value} glossary ({exc}) — running without it",
+        ))
+        return None
 
 
 def _load_recognizer(path: Path, vocab: Path):
@@ -98,12 +149,32 @@ class Interpreter:
         speak: Callable[[str], object] | None = None,
         render: Callable[[object, list], object] | None = None,
         log: DecisionLog | None = None,
+        domain: DomainContext | str | None = None,
+        safe_mode: SafeMode | None = None,
     ) -> None:
         self.log = log or DecisionLog()
-        self.waterfall = EscalationWaterfall(on_log=self.log.add)
         self.collision = CollisionManager()
         self.lookup = GlossLookup(lexicon_dir)
         self.recognizer, self.recognizer_kind = _load_recognizer(recognizer_path, vocab_dir)
+
+        # ---- Stage 2 ---------------------------------------------------------
+        # One session glossary per call (T2.1, FR-18): constructed here, dropped
+        # with the Interpreter, never written anywhere.
+        self.session_glossary = SessionGlossary(on_log=self.log.add)
+        self.domain = _resolve_domain(domain)
+        self.domain_glossary = _load_domain_glossary(self.domain, self.log)
+        # T2.3. Registered process-wide so the Stage 1 call sites several layers
+        # down can read `safe_mode.is_active()` without a signature change.
+        self.safe_mode = safe_mode or SafeMode(
+            on_log=self.log.add, on_hold_message=self._hold_message
+        )
+        safe_mode_module.register(self.safe_mode)
+
+        self.waterfall = EscalationWaterfall(
+            on_log=self.log.add,
+            session_glossary=self.session_glossary,
+            domain_glossary=self.domain_glossary,
+        )
         # Injected so the loop can be exercised without a virtual microphone or a
         # browser attached; the real sinks are wired in by scripts/run_interpreter.py.
         self._speak = speak
@@ -178,31 +249,67 @@ class Interpreter:
             raw_input=transcript, confidence=1.0,
             coverage_status=None, timestamp=time.time(),
         )
-        try:
-            result = to_gloss(transcript, vocabulary=self.lookup.glosses)
-        except GlossError as exc:
-            return Outcome(Direction.SPEECH_TO_SIGN, Action.REFUSE, segment,
-                           detail=f"gloss failed: {exc}")
+        # T2.1/T2.2: the glossaries are checked *before* the reasoning call, not
+        # after. A cache consulted after the tokens have already been spent
+        # saves nothing — and protecting the real 8,000 tokens/min ceiling is
+        # the entire justification for having them (NFR-11, TNFR-8).
+        gloss_text = self._glossary_lookup(transcript)
+        if gloss_text is not None:
+            result = _GlossaryResult(gloss_text)
+        else:
+            try:
+                result = to_gloss(transcript, vocabulary=self.lookup.glosses)
+            except GlossError as exc:
+                return Outcome(Direction.SPEECH_TO_SIGN, Action.REFUSE, segment,
+                               detail=f"gloss failed: {exc}")
+            # Record what reasoning worked out, so the next occurrence in this
+            # call is free. Only a real resolution is recorded, never a guess.
+            self.session_glossary.record(transcript, result.gloss)
 
         coverage = self.lookup.coverage_for(list(result.tokens))
         unmatched = [c.gloss for c in coverage if c.status is CoverageStatus.UNMATCHED]
         renderable = [c.gloss for c in coverage if c.status is CoverageStatus.LEXICON_HIT]
+        spellable = [c.gloss for c in coverage if c.status is CoverageStatus.FINGERSPELLING]
         segment.raw_input = result.gloss
         segment.coverage_status = (
             CoverageStatus.UNMATCHED if unmatched else CoverageStatus.LEXICON_HIT
         )
 
         decision = self.waterfall.process(segment, unmatched=unmatched)
-        if decision.action is not Action.TRANSLATE or not renderable:
+        if decision.action is not Action.TRANSLATE or not (renderable or spellable):
             # Refusing is the correct outcome for a term with no validated sign;
             # rendering the rest would present a partial sentence as a whole one.
             return Outcome(Direction.SPEECH_TO_SIGN, decision.action, segment,
                            detail=decision.reason or "nothing renderable",
                            gloss=result.gloss, coverage=coverage)
 
+        # T2.3/FR-21: while degraded, no *new* avatar animation is started. The
+        # gloss still reaches the participant as text, carrying the unrendered
+        # label so it can never be mistaken for a rendered result (NFR-9).
+        if self.safe_mode.is_active:
+            self.log.add(DecisionLogEntry(
+                timestamp=time.time(), stage="ACTION", segment_id=segment.id,
+                detail=f"safe mode: avatar animation suppressed for {result.gloss!r}; "
+                       f"shown as text with the unrendered label",
+            ))
+            return Outcome(Direction.SPEECH_TO_SIGN, Action.TRANSLATE, segment,
+                           detail=decision.reason, gloss=result.gloss,
+                           coverage=coverage,
+                           unrendered=self.safe_mode.unrendered_label)
+
         pose, timeline = build_avatar_sequence(
             renderable, self.lookup.lexicon_dir, target_fps=RENDER_FPS
-        )
+        ) if renderable else (None, [])
+
+        # T2.6: terms with no sign are spelled rather than dropped. Appended
+        # after the signed portion, in the order the gloss put them.
+        spelled = self._fingerspell_tokens(spellable, segment)
+        pose = _join_poses(pose, [s.pose for s in spelled if s.pose is not None])
+        if pose is None:
+            return Outcome(Direction.SPEECH_TO_SIGN, Action.REFUSE, segment,
+                           detail="nothing renderable or spellable",
+                           gloss=result.gloss, coverage=coverage)
+
         pose, _ = smooth(pose)
         frames = int(pose.body.data.shape[0])
         duration = frames / RENDER_FPS
@@ -212,7 +319,64 @@ class Interpreter:
             self._render(pose, timeline)
         return Outcome(Direction.SPEECH_TO_SIGN, Action.TRANSLATE, segment,
                        detail=decision.reason, gloss=result.gloss, coverage=coverage,
-                       pose_frames=frames, timeline=timeline)
+                       pose_frames=frames, timeline=timeline,
+                       fingerspelled=tuple(s.term for s in spelled if s.pose is not None))
+
+    # ---- Stage 2 helpers ----------------------------------------------------
+
+    def _glossary_lookup(self, transcript: str) -> str | None:
+        """Session glossary, then domain glossary. None means neither had it.
+
+        Order matters: the session glossary holds what *this conversation* has
+        already settled, which is more specific than the room's curated default
+        and must win over it.
+        """
+        hit = self.session_glossary.resolve(transcript)
+        if hit is not None:
+            return hit.resolution
+        if self.domain_glossary is not None:
+            hit = self.domain_glossary.resolve(transcript)
+            if hit is not None:
+                # Promote a domain hit into the session glossary so the rest of
+                # the call skips even the file lookup.
+                self.session_glossary.record(transcript, hit.resolution)
+                return hit.resolution
+        return None
+
+    def _fingerspell_tokens(self, tokens: list[str], segment: Segment) -> list:
+        """Spell each out-of-vocabulary token, logging what was spelled (FR-28)."""
+        spelled = []
+        for token in tokens:
+            try:
+                result = fingerspell.spell(token)
+            except fingerspell.FingerspellError as exc:
+                self.log.add(DecisionLogEntry(
+                    timestamp=time.time(), stage="DECIDE", segment_id=segment.id,
+                    detail=f"cannot fingerspell {token!r}: {exc}",
+                ))
+                continue
+            self.log.add(DecisionLogEntry(
+                timestamp=time.time(), stage="ACTION", segment_id=segment.id,
+                detail=f"FINGERSPELLING — {fingerspell.describe(result)}",
+            ))
+            spelled.append(result)
+        return spelled
+
+    def _hold_message(self, message: str) -> None:
+        """Speak safe mode's hold message (FR-21), through the normal TTS sink."""
+        if self._speak:
+            self._speak(message)
+
+    def close(self) -> None:
+        """End the call. FR-18's discard, made an explicit act rather than a hope."""
+        self.session_glossary.discard()
+        safe_mode_module.register(None)
+
+    def __enter__(self) -> "Interpreter":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
 
     # ---- shared -------------------------------------------------------------
 
@@ -222,6 +386,41 @@ class Interpreter:
 
     def trace(self, limit: int | None = None) -> str:
         return self.log.render(limit=limit)
+
+
+@dataclass(frozen=True)
+class _GlossaryResult:
+    """A glossary hit, shaped like `to_gloss`'s result so the caller is uniform.
+
+    Deliberately not a subclass of `GlossResult`: this did not come from a model
+    and carries no latency or model attribution to report. Sharing the two
+    fields the caller reads is the whole contract.
+    """
+
+    gloss: str
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        return tuple(t for t in self.gloss.split() if t)
+
+
+def _join_poses(first, rest: list):
+    """Concatenate a signed sequence with any fingerspelled ones after it."""
+    parts = [p for p in ([first] if first is not None else []) + list(rest) if p is not None]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+
+    from pose_format import Pose
+    from pose_format.numpy import NumPyPoseBody
+
+    data = np.ma.array(np.concatenate([np.asarray(p.body.data) for p in parts], axis=0))
+    confidence = np.concatenate([np.asarray(p.body.confidence) for p in parts], axis=0)
+    return Pose(
+        header=parts[0].header,
+        body=NumPyPoseBody(fps=float(parts[0].body.fps), data=data, confidence=confidence),
+    )
 
 
 def interpreter_from_paths(**kwargs) -> Interpreter:

@@ -44,3 +44,39 @@ class DecisionLogEntry:
     stage: str          # "OBSERVE" | "DECIDE" | "ACTION"
     segment_id: str
     detail: str          # human-readable, e.g. "candidate disagreement: HIGH"
+
+
+# --- Stage 2 (build instructions §B.2) ---------------------------------------
+#
+# Appended, not woven in: everything above is Stage 1's and is byte-identical to
+# its Stage 1 form. These three types extend that contract for the resilience
+# layer and reuse `CoverageStatus` above rather than introducing a second status
+# vocabulary for glossary hits or fingerspelled output (NFR-12).
+
+
+class DomainContext(Enum):
+    """Which curated glossary a session is running against.
+
+    Human-supplied at session start, never inferred — automatic topic-shift
+    detection is permanently out of scope for this project, and guessing the
+    room's domain would be exactly that by another name.
+    """
+
+    GENERAL = "general"
+    MEDICAL = "medical"
+    TECHNICAL = "technical"
+
+
+@dataclass
+class GlossaryHit:
+    term: str
+    resolution: str                   # resolved gloss text or pose reference
+    source: str                       # "session" | "domain"
+    coverage_status: CoverageStatus   # reuse Stage 1's enum — do not define a second one
+
+
+@dataclass
+class SafeModeEvent:
+    timestamp: float
+    triggered_by: str   # "latency" | "error" | "queue_age"
+    entering: bool      # True = entering safe mode, False = exiting

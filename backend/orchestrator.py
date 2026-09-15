@@ -271,9 +271,18 @@ class Interpreter:
         renderable = [c.gloss for c in coverage if c.status is CoverageStatus.LEXICON_HIT]
         spellable = [c.gloss for c in coverage if c.status is CoverageStatus.FINGERSPELLING]
         segment.raw_input = result.gloss
-        segment.coverage_status = (
-            CoverageStatus.UNMATCHED if unmatched else CoverageStatus.LEXICON_HIT
-        )
+        # The segment's own status is the weakest tier any of its tokens reached.
+        # Stage 1 only had two outcomes here; with T2.6 a sentence can be part
+        # signed and part spelled, and calling that a clean LEXICON_HIT would
+        # tell the panel the whole thing was signed when some of it was spelled
+        # out — a small lie in exactly the place the four-tier vocabulary exists
+        # to prevent one (FR-28, NFR-12).
+        if unmatched:
+            segment.coverage_status = CoverageStatus.UNMATCHED
+        elif spellable:
+            segment.coverage_status = CoverageStatus.FINGERSPELLING
+        else:
+            segment.coverage_status = CoverageStatus.LEXICON_HIT
 
         decision = self.waterfall.process(segment, unmatched=unmatched)
         if decision.action is not Action.TRANSLATE or not (renderable or spellable):

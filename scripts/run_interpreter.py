@@ -28,13 +28,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from backend.contracts import DomainContext  # noqa: E402
 from backend.orchestrator import Interpreter  # noqa: E402
+from backend.speech_to_sign import fingerspell  # noqa: E402
 from backend.waterfall.escalation import Action  # noqa: E402
 
 ARROW = {Action.TRANSLATE: "->", Action.CLARIFY: "??", Action.REFUSE: "!!"}
 
 
-def build(speaking: bool, rendering: bool) -> Interpreter:
+def build(speaking: bool, rendering: bool, domain: str | None = None) -> Interpreter:
     speak = render = None
     if speaking:
         from backend.meeting_bridge.virtualcam import BridgeError, VirtualMicrophone
@@ -64,7 +66,7 @@ def build(speaking: bool, rendering: bool) -> Interpreter:
             print(f"  avatar sequence -> data/out/live_sequence.pose "
                   f"({len(timeline)} signs)")
 
-    return Interpreter(speak=speak, render=render)
+    return Interpreter(speak=speak, render=render, domain=domain)
 
 
 def report(outcome, interpreter: Interpreter) -> None:
@@ -79,9 +81,19 @@ def report(outcome, interpreter: Interpreter) -> None:
     else:
         print(f"  {outcome.detail}")
     if outcome.coverage:
-        unmatched = [c.gloss for c in outcome.coverage if c.status.value != "lexicon_hit"]
+        # Stage 2 split this line in two. A fingerspelled term is not a
+        # missing sign — it produced real output — so reporting both under
+        # "no validated sign" would undo exactly what T2.6 built.
+        unmatched = [c.gloss for c in outcome.coverage
+                     if c.status.value == "unmatched"]
+        spelled = [c.gloss for c in outcome.coverage
+                   if c.status.value == "fingerspelling"]
+        if spelled:
+            print(f"     fingerspelled: {', '.join(spelled)}")
         if unmatched:
             print(f"     no validated sign for: {', '.join(unmatched)}")
+    if outcome.unrendered:
+        print(f"     [{outcome.unrendered}]")
     print("\n" + interpreter.trace(limit=6) + "\n")
 
 
@@ -133,13 +145,21 @@ def main() -> int:
     parser.add_argument("--motion", type=float, default=0.012)
     parser.add_argument("--limit", type=int, default=None, help="stop after N signs")
     parser.add_argument("--silent", action="store_true", help="do not use the virtual mic")
+    # FR-19: the room's domain is supplied by a human at session start, never
+    # inferred. Defaults to DOMAIN_GLOSSARY_DEFAULT, then "general".
+    parser.add_argument("--domain", choices=[d.value for d in DomainContext],
+                        default=None, help="which curated glossary this room runs against")
     args = parser.parse_args()
 
     speaking = bool(args.sign_to_speech or args.dry_run) and not args.silent
-    interpreter = build(speaking=speaking, rendering=args.speech_to_sign is not None)
+    interpreter = build(speaking=speaking, rendering=args.speech_to_sign is not None,
+                        domain=args.domain)
     print(f"recogniser: {interpreter.recognizer_kind}, "
           f"{len(interpreter.recognizer.vocabulary)} signs | "
-          f"lexicon: {len(interpreter.lookup.glosses)} signs\n")
+          f"lexicon: {len(interpreter.lookup.glosses)} signs | "
+          f"domain: {interpreter.domain.value}"
+          f"{f' ({len(interpreter.domain_glossary)} terms)' if interpreter.domain_glossary else ''}"
+          f" | fingerspelling: {len(fingerspell.available_letters())}/26\n")
 
     if args.sign_to_speech:
         return run_sign_to_speech(interpreter, args)

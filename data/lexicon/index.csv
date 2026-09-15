@@ -1,17 +1,17 @@
 path,spoken_language,signed_language,start,end,segment_start,segment_end,words,glosses,priority
-ins/go.pose,en,ins,0,0,366,2166,go,GO,0
-ins/he.pose,en,ins,0,0,2766,5100,he,HE,0
-ins/hello.pose,en,ins,0,0,0,3366,hello,HELLO,0
-ins/help.pose,en,ins,0,0,1200,3733,help,HELP,0
-ins/hospital.pose,en,ins,0,0,0,3133,hospital,HOSPITAL,0
-ins/no.pose,en,ins,0,0,1733,4166,no,NO,0
-ins/okay.pose,en,ins,0,0,0,3366,okay,OKAY,0
-ins/please.pose,en,ins,0,0,666,3500,please,PLEASE,0
-ins/she.pose,en,ins,0,0,1466,3766,she,SHE,0
-ins/sit.pose,en,ins,0,0,3600,5666,sit,SIT,0
-ins/thank-you.pose,en,ins,0,0,0,3166,thank you,THANK-YOU,0
-ins/today.pose,en,ins,0,0,1300,3300,today,TODAY,0
-ins/what.pose,en,ins,0,0,800,2533,what,WHAT,0
-ins/where.pose,en,ins,0,0,2000,4166,where,WHERE,0
-ins/yes.pose,en,ins,0,0,400,2833,yes,YES,0
-ins/you.pose,en,ins,0,0,1200,2933,you,YOU,0
+ins/hello.pose,en,ins,0,0,720,2120,hello,HELLO,0
+ins/thank-you.pose,en,ins,0,0,640,2040,thank you,THANK-YOU,0
+ins/please.pose,en,ins,0,0,680,3400,please,PLEASE,0
+ins/yes.pose,en,ins,0,0,1120,2800,yes,YES,0
+ins/no.pose,en,ins,0,0,920,2440,no,NO,0
+ins/you.pose,en,ins,0,0,360,1840,you,YOU,0
+ins/he.pose,en,ins,0,0,480,1840,he,HE,0
+ins/she.pose,en,ins,0,0,840,2520,she,SHE,0
+ins/hospital.pose,en,ins,0,0,1520,3320,hospital,HOSPITAL,0
+ins/help.pose,en,ins,0,0,720,2160,help,HELP,0
+ins/go.pose,en,ins,0,0,800,1960,go,GO,0
+ins/sit.pose,en,ins,0,0,560,2200,sit,SIT,0
+ins/okay.pose,en,ins,0,0,640,2560,okay,OKAY,0
+ins/what.pose,en,ins,0,0,720,1720,what,WHAT,0
+ins/where.pose,en,ins,0,0,440,2040,where,WHERE,0
+ins/today.pose,en,ins,0,0,480,1720,today,TODAY,0

@@ -2,29 +2,29 @@
   {
     "gloss": "HELLO",
     "start_frame": 0,
-    "end_frame": 111,
+    "end_frame": 43,
     "start_s": 0.0,
-    "duration_s": 3.7
+    "duration_s": 1.72
   },
   {
     "gloss": "YOU",
-    "start_frame": 120,
-    "end_frame": 182,
-    "start_s": 4.0,
-    "duration_s": 2.067
+    "start_frame": 50,
+    "end_frame": 95,
+    "start_s": 2.0,
+    "duration_s": 1.8
   },
   {
     "gloss": "SIT",
-    "start_frame": 191,
-    "end_frame": 260,
-    "start_s": 6.367,
-    "duration_s": 2.3
+    "start_frame": 102,
+    "end_frame": 151,
+    "start_s": 4.08,
+    "duration_s": 1.96
   },
   {
     "gloss": "PLEASE",
-    "start_frame": 269,
-    "end_frame": 364,
-    "start_s": 8.967,
-    "duration_s": 3.167
+    "start_frame": 158,
+    "end_frame": 234,
+    "start_s": 6.32,
+    "duration_s": 3.04
   }
 ]

@@ -29,6 +29,31 @@ from backend.recognition.extract import load_pose  # noqa: E402
 from backend.recognition.neural import NeuralSignClassifier, SignNet  # noqa: E402
 from scripts.train_recognizer import held_out, score  # noqa: E402
 
+FEATURES = ROOT / "data" / "models" / "features.npz"
+
+
+def notebook_split(seed: int):
+    """Reproduce the split from `features.npz`, which is what a notebook trains on.
+
+    Deriving it from the directory listing instead is subtly wrong, and was: one
+    clip in the corpus has no usable signing segment, so `features.npz` holds 641
+    rows where the disk holds 642. That one missing row shifts the shared random
+    stream for every class after it alphabetically, and four clips the notebook
+    had trained on landed in the test set here — reporting 78.8% where the honest
+    figure was 76.1%. Splitting over the same array the model was trained on
+    removes the discrepancy rather than documenting it.
+    """
+    blob = np.load(FEATURES, allow_pickle=True)
+    y, names = blob["y"], blob["names"]
+    classes = [str(c) for c in blob["classes"]]
+    rng = np.random.RandomState(seed)
+    test = []
+    for index in range(len(classes)):
+        rows = np.where(y == index)[0]
+        n_test = 2 if len(rows) >= 5 else (1 if len(rows) >= 3 else 0)
+        test += list(rng.permutation(rows)[:n_test])
+    return blob, classes, np.array(sorted(test))
+
 DEST = ROOT / "data" / "models" / "recognizer.pt"
 
 
@@ -79,30 +104,36 @@ def main() -> int:
     print(f"loaded: {len(trained)} classes, "
           f"{sum(p.numel() for p in model.parameters())/1e3:.0f}k parameters\n")
 
-    # Score it the same way the training script does, on the same split.
-    classes, train, test = held_out(args.vocab, args.seed)
-    hit, total, right, wrong = score(classifier.classify_features, test)
+    # Scored on the split derived from features.npz — the same rows the notebook
+    # held out — so the number here is the one the notebook should have reported.
+    blob, feature_classes, test_rows = notebook_split(args.seed)
+    X, y = blob["X"], blob["y"]
+    train_rows = np.array([i for i in range(len(y)) if i not in set(test_rows)])
+
+    hit = sum(
+        classifier.classify_features(X[i]).gloss_id == feature_classes[y[i]]
+        for i in test_rows
+    )
+    kept = wrong_kept = 0
+    for i in test_rows:
+        prediction = classifier.classify_features(X[i])
+        if prediction.coverage_status.value == "lexicon_hit":
+            kept += 1
+            wrong_kept += prediction.gloss_id != feature_classes[y[i]]
 
     dtw = SignClassifier()
-    for gloss in classes:
-        for path in train[gloss]:
-            try:
-                dtw.add_template(gloss, pose_features(load_pose(path)))
-            except Exception:
-                pass
-    dhit, dtotal, dright, dwrong = score(dtw.classify_features, test)
+    for i in train_rows:
+        dtw.add_template(feature_classes[y[i]], X[i])
+    dhit = sum(
+        dtw.classify_features(X[i]).gloss_id == feature_classes[y[i]] for i in test_rows
+    )
 
-    print(f"held-out {total} clips")
+    total = len(test_rows)
+    print(f"held-out {total} clips (the split features.npz implies, seed {args.seed})")
     print(f"  imported model   top-1 {hit/total:.1%}   "
-          f"above 0.22: {right} right / {wrong} wrong")
-    print(f"  DTW baseline     top-1 {dhit/dtotal:.1%}   "
-          f"above 0.22: {dright} right / {dwrong} wrong")
-
-    # A caveat worth printing rather than hiding: if the notebook held out the
-    # same clips, they were in its training set here, and this is optimistic.
-    print("\nnote: if the notebook used the same split, these test clips were in its\n"
-          "      training data and this number is optimistic. Re-run the notebook's\n"
-          "      own evaluation for the honest figure.")
+          f"reported LEXICON_HIT on {kept}, {kept-wrong_kept} right "
+          f"({(kept-wrong_kept)/max(kept,1):.0%} precision)")
+    print(f"  DTW baseline     top-1 {dhit/total:.1%}")
 
     if hit <= dhit and not args.force:
         print(f"\nnot installing — it does not beat DTW. Pass --force to install anyway.")

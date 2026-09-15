@@ -85,6 +85,43 @@ entries, 326 clips, minimum 16 clips per class.
 
 ---
 
+## Current state — the two directions are no longer the same size
+
+**REVISION 2026-09-15 (second):** the whole `vidit031/isl-isolated-40words`
+corpus is now extracted, so the two directions run at different vocabulary
+sizes. That is a real asymmetry and is stated here rather than discovered:
+
+| | words | source |
+|---|---|---|
+| Sign->Speech (recognition) | **40** | `data/vocab/`, 641 usable clips |
+| Speech->Sign (lexicon) | **16** | `data/lexicon/ins/`, ISLRTC dictionary |
+
+Recognition needs many clips per class to train and calibrate; the lexicon needs
+exactly one good clip per gloss. The 16-clips-per-class rule below was always a
+recognition constraint and never applied to the lexicon.
+
+**Do not extend the lexicon by running `build_lexicon()` over `data/vocab/`.**
+It sources from `data/vocab/raw_video/`, which is the 854x480 aggregated corpus.
+The lexicon on disk was rebuilt from the ISLRTC dictionary at 1920x1080 — 95px
+of palm against the corpus's 78px, which is what the avatar's finger solving
+depends on. Running the builder would silently downgrade every existing entry to
+get 24 new ones. Extending Speech->Sign to 40 means fetching ISLRTC clips for the
+24 new glosses, not reusing what recognition trains on.
+
+The 24 added glosses are conversational and domestic — `friend`, `school`,
+`market`, `eat`, `mother`, `water`, `food`, `sister`, `student`, `tea`,
+`teacher`, `drink`, `father`, `sorry`, `come`, `stop`, `brother`, `goodbye`,
+`me`, `read`, `write`, `stand`, `when`, `home`. They do not close the medical
+gap described below: `DOCTOR`, `MEDICINE`, `PAIN` and `APPOINTMENT` are still
+absent from the corpus entirely.
+
+Note `me`, `come`, `sorry` and `when` appear below as deferred for insufficient
+data. That deferral was, correctly, about recognition — 2 to 6 clips cannot
+support a calibrated confidence. They are extracted now and the recogniser
+includes them, but their per-class accuracy should be read with that in mind.
+
+---
+
 ## Phase 2 vocabulary — deferred, not rejected
 
 Adding a class is a cheap retrain of the same small classifier head (T1.4), so

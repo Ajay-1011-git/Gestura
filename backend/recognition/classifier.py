@@ -159,10 +159,23 @@ class Prediction:
     runner_up_distance: float
 
 
-def confidence_to_coverage(confidence: float) -> CoverageStatus:
-    if confidence >= LEXICON_HIT_THRESHOLD:
+def confidence_to_coverage(
+    confidence: float,
+    *,
+    lexicon_hit: float = LEXICON_HIT_THRESHOLD,
+    language_backup: float = LANGUAGE_BACKUP_THRESHOLD,
+) -> CoverageStatus:
+    """Map a recogniser's confidence onto the shared four-tier status.
+
+    The thresholds are arguments because they are a property of the classifier,
+    not of the status vocabulary. DTW's confidence is a normalised distance
+    margin and the learned recogniser's is a softmax margin; the two are on
+    different scales even though both run 0-1, and calibrating one against the
+    other's numbers would silently change how often the waterfall escalates.
+    """
+    if confidence >= lexicon_hit:
         return CoverageStatus.LEXICON_HIT
-    if confidence >= LANGUAGE_BACKUP_THRESHOLD:
+    if confidence >= language_backup:
         return CoverageStatus.LANGUAGE_BACKUP
     return CoverageStatus.UNMATCHED
 

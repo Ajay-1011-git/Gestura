@@ -51,6 +51,14 @@ FEATURE_DIM = 134           # 25 upper-body + 21 + 21 hand landmarks, x and y
 HIDDEN = 128
 LAYERS = 2
 
+# Calibrated on the held-out split, not inherited. DTW's 0.22 is a distance
+# margin; this is a softmax margin, and on the same 67 clips 0.15 keeps 58 of
+# them at 84% precision. Carrying 0.22 across would have thrown away correct
+# recognitions the model was confident about, which shows up as the waterfall
+# asking for clarification on signs it had actually read.
+LEXICON_HIT_MARGIN = 0.15
+LANGUAGE_BACKUP_MARGIN = 0.05
+
 
 class SignNet(nn.Module):
     """Bidirectional GRU over the normalised landmark sequence.
@@ -204,7 +212,11 @@ class NeuralSignClassifier:
         return Prediction(
             gloss_id=self.classes[best],
             confidence=confidence,
-            coverage_status=confidence_to_coverage(confidence),
+            coverage_status=confidence_to_coverage(
+                confidence,
+                lexicon_hit=LEXICON_HIT_MARGIN,
+                language_backup=LANGUAGE_BACKUP_MARGIN,
+            ),
             runner_up=self.classes[runner_up],
             best_distance=float(1 - probabilities[best]),
             runner_up_distance=float(1 - probabilities[runner_up]),

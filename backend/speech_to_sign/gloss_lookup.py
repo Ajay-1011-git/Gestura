@@ -108,6 +108,14 @@ def build_lexicon(
     ``index.csv`` so lookup renders the sign rather than the resting frames
     around it.
 
+    **This is not how the shipped lexicon was built, and running it over
+    `data/vocab/` would downgrade it.** The entries on disk come from the ISLRTC
+    dictionary at 1920x1080 (`data/lexicon_src/`), measuring 95px of palm;
+    `data/vocab/raw_video/` holds the aggregated corpus at 854x480 and 78px. The
+    avatar's finger solving reads that difference directly. Point this at ISLRTC
+    source video, or accept that every existing entry is replaced with a
+    lower-resolution one to gain the new glosses.
+
     The chosen clip is re-extracted from source video with **all** MediaPipe
     components retained. T1.3 drops FACE_LANDMARKS from recognition poses to cut
     file size roughly 7.7x, but this package's smoothing step indexes that
